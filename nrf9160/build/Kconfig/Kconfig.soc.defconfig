@@ -1,0 +1,2 @@
+osource "/home/kantum/depots/ncs/zephyr/soc/$(ARCH)/*/Kconfig.defconfig"
+osource "/home/kantum/depots/ncs/zephyr/soc/$(ARCH)/*/Kconfig.defconfig"

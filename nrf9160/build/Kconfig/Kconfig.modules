@@ -1,0 +1,6 @@
+osource "/home/kantum/depots/ncs/nrf/Kconfig.nrf"
+
+osource "/home/kantum/depots/ncs/bootloader/mcuboot/zephyr/Kconfig"
+
+osource "/home/kantum/depots/ncs/nrfxlib/Kconfig.nrfxlib"
+
