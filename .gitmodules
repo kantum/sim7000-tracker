@@ -1,0 +1,3 @@
+[submodule "lilygo-sim7000/lib/TinyGSM"]
+	path = lilygo-sim7000/lib/TinyGSM
+	url = git@github.com:FStefanni/TinyGSM.git
