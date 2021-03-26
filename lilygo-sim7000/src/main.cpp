@@ -15,7 +15,20 @@
 #define MODEM_TX 26
 #define MODEM_RX 27
 
+//#define SERIAL_BLUETOOTH
+
+#ifdef SERIAL_BLUETOOTH
+#define RX_QUEUE_SIZE 512
+#define TX_QUEUE_SIZE 32
+#include "BluetoothSerial.h"
+ #if !defined(CONFIG_BT_ENABLED) || !defined(CONFIG_BLUEDROID_ENABLED)
+ #error Bluetooth is not enabled! Please run `make menuconfig` to and enable it
+ #endif
+BluetoothSerial SerialMon;
+#else
 #define SerialMon Serial
+#endif
+
 HardwareSerial serialGsm(1);
 #define SerialAT serialGsm
 
@@ -24,8 +37,8 @@ HardwareSerial serialGsm(1);
 #endif
 
 // See all AT commands, if wanted
-//#define DUMP_AT_COMMANDS
-//#define TINY_GSM_DEBUG SerialMon
+#define DUMP_AT_COMMANDS
+#define TINY_GSM_DEBUG SerialMon
 
 #ifdef DUMP_AT_COMMANDS
 #include <StreamDebugger.h>
@@ -114,6 +127,22 @@ void setupCloudIoT(){
 // From Kantum
 ////////////////////////////////////////////////////////////////////////////////
 
+#include <Adafruit_Sensor.h>
+#include <Adafruit_BMP280.h>
+#include "SHT3X.h"
+
+SHT3X sht30(0x44);
+Adafruit_BMP280 bme;
+
+
+bool update_certs = 0; //TODO Keep this variable after restart
+
+int battpercent;
+int pressure;
+int temp;
+int hum;
+float lat;
+float lon;
 String getJwt();
 void pass_command();
 
@@ -128,6 +157,8 @@ bool connectCloudIoT() {
 	String port = "8883";
 	String keep_time = "60";
 
+	Serial.println(client_id);
+	if (update_certs) {
 	SerialMon.println("Setting SSL");
 
 	modem.sendAT(String("+CSSLCFG=\"sslversion\",0,3"));
@@ -142,7 +173,12 @@ bool connectCloudIoT() {
 	modem.sendAT(GF("+SMSSL=1,\"ca.pem\",\"client.pem\""));
 	if (modem.waitResponse(30000L) != 1) {SerialMon.println("ERROR"); return 0;}
 
+	update_certs = 0;
+	}
 	SerialMon.print(String("Connecting to ") + url + " ");
+
+	modem.sendAT(GF("+SMDISC"));
+	modem.waitResponse();
 
 	modem.sendAT(String("+SMCONF=\"URL\",\"") +
 			url +
@@ -191,6 +227,30 @@ bool connectCloudIoT() {
 }
 
 /**
+ * @brief Enable sim7000's gps
+ */
+void enableGPS(void)
+{
+    // Set SIM7000G GPIO4 LOW ,turn on GPS power
+    // CMD:AT+SGPIO=0,4,1,1
+    // Only in version 20200415 is there a function to control GPS power
+    modem.sendAT("+SGPIO=0,4,1,1");
+    modem.enableGPS();
+}
+
+/**
+ * @brief Disable sim7000's gps
+ */
+void disableGPS(void)
+{
+    // Set SIM7000G GPIO4 LOW ,turn off GPS power
+    // CMD:AT+SGPIO=0,4,1,0
+    // Only in version 20200415 is there a function to control GPS power
+    modem.sendAT("+SGPIO=0,4,1,0");
+    modem.disableGPS();
+}
+
+/**
  * @brief
  * @param cert The String containing the certificate to upload
  * @param name The name for the uploaded file
@@ -227,6 +287,38 @@ int modem_upload_cert(const char *cert, const char *name, int folder = 0)
 	modem.sendAT(F("+CFSTERM"));
 	if (modem.waitResponse(30000L) != 1) { return -1; }
 	return 1;
+}
+
+/**
+ * @brief Switch modem on with hardware pins
+ */
+void modemPowerOn()
+{
+    pinMode(MODEM_PWKEY, OUTPUT);
+    digitalWrite(MODEM_PWKEY, LOW);
+    delay(1000);    //Datasheet Ton mintues = 1S
+    digitalWrite(MODEM_PWKEY, HIGH);
+}
+
+/**
+ * @brief Switch modem off with hardware pins
+ */
+void modemPowerOff()
+{
+    pinMode(MODEM_PWKEY, OUTPUT);
+    digitalWrite(MODEM_PWKEY, LOW);
+    delay(1500);    //Datasheet Ton mintues = 1.2S
+    digitalWrite(MODEM_PWKEY, HIGH);
+}
+
+/**
+ * @brief Restarts modem with hardware pins
+ */
+void modemRestart()
+{
+    modemPowerOff();
+    delay(1000);
+    modemPowerOn();
 }
 
 /**
@@ -345,13 +437,23 @@ void pass_command()
 ////////////////////////////////////////////////////////////////////////////////
 
 void setup() {
-
+#ifdef SERIAL_BLUETOOTH
+	SerialMon.begin(MODULE_NAME);
+#else
 	SerialMon.begin(115200);
-	delay(10);
+#endif
+
 	SerialAT.begin(115200, SERIAL_8N1, MODEM_TX, MODEM_RX); //reversing them
-	delay(6000);
+	Wire.begin(21, 22); // I2C on Lilygo sim7000
+
+	SerialMon.println("Checking temperature sensor");
+	if (!bme.begin(0x76)) {
+		Serial.println("Could not find a valid BMP280 sensor, check wiring!");
+		while(1);
+	}
 
 	SerialMon.println("Initializing modem...");
+	//modemPowerOn();
 	modem_on();
 	//modem.restart();
 	modem.init();
@@ -390,14 +492,50 @@ void setup() {
 		while (1);
 	}
 	setupCloudIoT();
-	if (!connectCloudIoT()) {
-		SerialMon.println("Cannot connect to google");
-		while(1);
+	while(!connectCloudIoT()) {
+		SerialMon.println("Cannot connect to google, retrying...");
 	}
 
-	//sendMqtt("Bonjour Roger", "events");
-	sendMqtt(modem.getGSMDateTime(DATE_FULL).c_str(), "events");
-	pass_command();
+	battpercent = modem.getBattPercent();
+	pressure = bme.readPressure();
+	epoch = getEpoch();
+	if (sht30.get() == 0) {
+		temp = sht30.cTemp;
+		hum = sht30.humidity;
+	}
+
+	sendMqtt(String("{\"ts\":\"") +
+			String(epoch).c_str() +
+			"\",bat\":\"" +
+			String(battpercent).c_str() +
+			"\",\"temp\":\"" +
+			String(temp).c_str() +
+			"\",\"hum\":\"" +
+			String(hum).c_str() +
+			"\"}");
+
+
+	//modem.enableGPS();
+
+	//int gps_checks = 0;
+    //while (gps_checks < 30) {
+    //    if (modem.getGPS(&lat, &lon)) {
+    //        Serial.println("The location has been locked, the latitude and longitude are:");
+    //        Serial.print("latitude:"); Serial.println(lat);
+    //        Serial.print("longitude:"); Serial.println(lon);
+	//		gps_checks = 0;
+    //        break;
+    //    }
+	//	gps_checks++;
+	//	delay(1000);
+    //}
+
+    //disableGPS();
+
+
+	ESP.restart();
+
+//	pass_command();
 
 	//mqtt->loop();T
 	//delay(10);  // <- fixes some issues with WiFi stability
