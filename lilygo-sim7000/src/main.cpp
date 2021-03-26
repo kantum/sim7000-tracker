@@ -420,7 +420,9 @@ bool sendMqtt(String msg, String topic="events")
     if (modem.waitResponse(GF(">")) != 1) { return 0; }
     modem.stream.write(msg.c_str(), len);
     modem.stream.flush();
-    if (modem.waitResponse(GF("OK")) != 1) { return 0; }
+    if (modem.waitResponse(GF("OK")) != 1) { 
+		pass_command();
+		return 0; }
 
 	return 1;
 }
