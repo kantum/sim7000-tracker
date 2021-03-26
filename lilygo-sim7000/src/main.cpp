@@ -15,6 +15,10 @@
 #define MODEM_TX 26
 #define MODEM_RX 27
 
+#define LED_PIN 12
+
+#define uS_TO_S_FACTOR 1000000ULL  // Conversion factor for ms to seconds
+
 //#define SERIAL_BLUETOOTH
 
 #ifdef SERIAL_BLUETOOTH
@@ -134,8 +138,12 @@ void setupCloudIoT(){
 SHT3X sht30(0x44);
 Adafruit_BMP280 bme;
 
+RTC_DATA_ATTR int update_certs = 1;
 
-bool update_certs = 0; //TODO Keep this variable after restart
+/* Variables to mesure speed of functions */
+unsigned long start;
+unsigned long end;
+unsigned long delta;
 
 int battpercent;
 int pressure;
@@ -158,7 +166,6 @@ bool connectCloudIoT() {
 	String keep_time = "60";
 
 	Serial.println(client_id);
-	if (update_certs) {
 	SerialMon.println("Setting SSL");
 
 	modem.sendAT(String("+CSSLCFG=\"sslversion\",0,3"));
@@ -173,8 +180,6 @@ bool connectCloudIoT() {
 	modem.sendAT(GF("+SMSSL=1,\"ca.pem\",\"client.pem\""));
 	if (modem.waitResponse(30000L) != 1) {SerialMon.println("ERROR"); return 0;}
 
-	update_certs = 0;
-	}
 	SerialMon.print(String("Connecting to ") + url + " ");
 
 	modem.sendAT(GF("+SMDISC"));
@@ -227,7 +232,7 @@ bool connectCloudIoT() {
 }
 
 /**
- * @brief Enable sim7000's gps
+ * @brief Enable SIM7000's gps
  */
 void enableGPS(void)
 {
@@ -239,7 +244,7 @@ void enableGPS(void)
 }
 
 /**
- * @brief Disable sim7000's gps
+ * @brief Disable SIM7000's gps
  */
 void disableGPS(void)
 {
@@ -255,6 +260,11 @@ void disableGPS(void)
  * @param cert The String containing the certificate to upload
  * @param name The name for the uploaded file
  * @param folder 0 "/custapp/" 1 "/fota/" 2 "/datatx/" 3 "/customer/"
+ * @retval 0 success
+ * @retval -1 failed to init buffer
+ * @retval -2 failed to send write file command
+ * @retval -3 failed to send the string
+ * @retval -4 failed to free buffer
  */
 int modem_upload_cert(const char *cert, const char *name, int folder = 0)
 {
@@ -264,11 +274,15 @@ int modem_upload_cert(const char *cert, const char *name, int folder = 0)
 
 	// Init buffer
 	modem.sendAT(F("+CFSINIT"));
-	if (modem.waitResponse(10000L) != 1) { return -1; }
+	if (modem.waitResponse(10000L) != 1) {
+		modem.sendAT(F("+CFSTERM"));
+		modem.waitResponse();
+		return -1;
+	}
 
 	int timeout = 10000;
-	// Write file
 
+	// Write file
 	modem.sendAT(String("+CFSWFILE=") +
 			folder +
 			",\"" +
@@ -277,15 +291,27 @@ int modem_upload_cert(const char *cert, const char *name, int folder = 0)
 			len +
 			"," +
 			timeout);
-	if (modem.waitResponse(10000L, GF("DOWNLOAD")) != 1) { return -1; }
+	if (modem.waitResponse(10000L, GF("DOWNLOAD")) != 1) {
+		modem.sendAT(F("+CFSTERM"));
+		modem.waitResponse();
+		return -2;
+	}
 
 	for (int i = 0; i < len; i++)
 		SerialAT.print(cert[i]);
-	if (modem.waitResponse(30000L) != 1) { return -1; }
+
+	if (modem.waitResponse(10000L, GF("OK")) != 1) {
+		modem.sendAT(F("+CFSTERM"));
+		modem.waitResponse();
+		return -3;
+	}
 
 	// Free buffer
 	modem.sendAT(F("+CFSTERM"));
-	if (modem.waitResponse(30000L) != 1) { return -1; }
+	if (modem.waitResponse(10000L) != 1) {
+		return -4;
+	}
+
 	return 1;
 }
 
@@ -322,25 +348,6 @@ void modemRestart()
 }
 
 /**
- * @brief Switch modem on with hardware pins
- */
-void modem_on()
-{
-	// Set-up modem  power pin
-	pinMode(MODEM_PWKEY, OUTPUT);
-	digitalWrite(MODEM_PWKEY, HIGH);
-	delay(10);
-	digitalWrite(MODEM_PWKEY, LOW);
-	delay(1010); //Ton 1sec
-	digitalWrite(MODEM_PWKEY, HIGH);
-
-	//wait_till_ready();
-	Serial.println("Waiting till modem ready...");
-	delay(4510); //Ton uart 4.5sec but seems to need ~7sec after hard (button) reset
-	//On soft-reset serial replies immediately.
-}
-
-/**
  * @brief Sync ntp time with SIM7000 internal clock
  * @param server The NTP server address
  * @param timezone The time zone you need to get when you call 
@@ -365,7 +372,7 @@ time_t getEpoch() {
 		if (NTPServerSync("pool.ntp.org", 1) < 0) {
 			SerialMon.println("NTP Failed");
 			ntp_connected = false;
-			while(1);
+			return 0;
 		}
 		ntp_connected = true;
 	}
@@ -411,10 +418,11 @@ bool sendMqtt(String msg, String topic="events")
 			len +
 			",1,1");
     if (modem.waitResponse(GF(">")) != 1) { return 0; }
-
     modem.stream.write(msg.c_str(), len);
     modem.stream.flush();
-    if (modem.waitResponse(GF("OK")) != 1) { return 0; }
+    if (modem.waitResponse(GF("OK")) != 1) { 
+		pass_command();
+		return 0; }
 
 	return 1;
 }
@@ -442,58 +450,77 @@ void setup() {
 #else
 	SerialMon.begin(115200);
 #endif
-
-	SerialAT.begin(115200, SERIAL_8N1, MODEM_TX, MODEM_RX); //reversing them
-	Wire.begin(21, 22); // I2C on Lilygo sim7000
+	SerialAT.begin(115200, SERIAL_8N1, MODEM_TX, MODEM_RX);
+	Wire.begin(21, 22); // I2C on Lilygo SIM7000
 
 	SerialMon.println("Checking temperature sensor");
 	if (!bme.begin(0x76)) {
 		Serial.println("Could not find a valid BMP280 sensor, check wiring!");
-		while(1);
 	}
+
+	start = micros();
+
+	pinMode(LED_PIN, OUTPUT);
+	digitalWrite(LED_PIN, LOW);
 
 	SerialMon.println("Initializing modem...");
-	//modemPowerOn();
-	modem_on();
-	//modem.restart();
-	modem.init();
 
-	SerialMon.print(F("Connecting to "));
-	SerialMon.print(apn);
-	while (!modem.gprsConnect(apn, gprsUser, gprsPass)) {
-		SerialMon.println(" fail");
-		delay(1000);
-		SerialMon.print("Retrying");
-		modem.restart();
-	}
-	SerialMon.println(" success");
+	modemPowerOn();
 
-	if (modem.isGprsConnected()) {
-		SerialMon.println("GPRS connected");
+	if (!modem.init()) {
+		modemRestart();
+		delay(2000);
 	}
 
-	Serial.println("configuring LTE-M mode");
 	modem.setNetworkMode(38);
 	modem.setPreferredMode(1);
 	modem.sendAT(F("+CBANDCFG=\"CAT-M\","), 20);
-	if (modem.waitResponse(30000L) != 1) { SerialMon.println("ERROR"); pass_command();}
 
-	if (modem_upload_cert(root_cert, "ca.pem", 3) < 1) {
-		SerialMon.println("Upload Certificate failed");
-		while (1);
+	while(!modem.isNetworkConnected()) {
+		Serial.print(".");
 	}
-	if (modem_upload_cert(client_cert_mosquitto, "client.pem", 3) < 1) {
-		SerialMon.println("Upload Certificate failed");
-		while (1);
-	}
+	Serial.println();
 
-	if (modem_upload_cert(client_key_mosquitto, "client.key", 3) < 1) {
-		SerialMon.println("Upload Certificate failed");
-		while (1);
+	SerialMon.print("Connecting to " + String(apn) + " ");
+	while (!modem.gprsConnect(apn)) {
+		SerialMon.println(" fail");
+		SerialMon.print("Retrying");
+		modem.gprsDisconnect();
+	}
+	SerialMon.println(" success");
+
+	digitalWrite(LED_PIN, HIGH);
+
+	end = micros();
+	delta = end - start;
+	double connect_time = (double)delta / uS_TO_S_FACTOR;
+
+	Serial.println("");
+	Serial.print("Time to connect: ");
+	Serial.print(connect_time);
+	Serial.println(" seconds");
+
+	while (update_certs)
+	{
+		if (modem_upload_cert(root_cert, "ca.pem", 3) < 1) {
+			SerialMon.println("Upload Certificate failed");
+			continue;
+		}
+		if (modem_upload_cert(client_cert_mosquitto, "client.pem", 3) < 1) {
+			SerialMon.println("Upload Certificate failed");
+			continue;
+		}
+		if (modem_upload_cert(client_key_mosquitto, "client.key", 3) < 1) {
+			SerialMon.println("Upload Certificate failed");
+			continue;
+		}
+		update_certs = 0;
 	}
 	setupCloudIoT();
+
 	while(!connectCloudIoT()) {
 		SerialMon.println("Cannot connect to google, retrying...");
+		pass_command();
 	}
 
 	battpercent = modem.getBattPercent();
@@ -514,28 +541,29 @@ void setup() {
 			String(hum).c_str() +
 			"\"}");
 
+	//modem.gprsDisconnect();
+	modem.poweroff();
 
 	//modem.enableGPS();
 
 	//int gps_checks = 0;
-    //while (gps_checks < 30) {
-    //    if (modem.getGPS(&lat, &lon)) {
-    //        Serial.println("The location has been locked, the latitude and longitude are:");
-    //        Serial.print("latitude:"); Serial.println(lat);
-    //        Serial.print("longitude:"); Serial.println(lon);
+	//while (gps_checks < 30) {
+	//    if (modem.getGPS(&lat, &lon)) {
+	//        Serial.println("The location has been locked, the latitude and longitude are:");
+	//        Serial.print("latitude:"); Serial.println(lat);
+	//        Serial.print("longitude:"); Serial.println(lon);
 	//		gps_checks = 0;
-    //        break;
-    //    }
+	//        break;
+	//    }
 	//	gps_checks++;
 	//	delay(1000);
-    //}
+	//}
 
-    //disableGPS();
-
+	//disableGPS();
 
 	ESP.restart();
 
-//	pass_command();
+	//	pass_command();
 
 	//mqtt->loop();T
 	//delay(10);  // <- fixes some issues with WiFi stability
