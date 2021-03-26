@@ -17,8 +17,6 @@
 #include "module_config.h"
 
 const char *apn = APN;
-const char *gprsUser = "";
-const char *gprsPass = "";
 
 // Cloud iot details.
 const char *project_id = GCLOUD_PROJECT_ID;
