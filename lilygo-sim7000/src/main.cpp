@@ -25,9 +25,9 @@
 #define RX_QUEUE_SIZE 512
 #define TX_QUEUE_SIZE 32
 #include "BluetoothSerial.h"
- #if !defined(CONFIG_BT_ENABLED) || !defined(CONFIG_BLUEDROID_ENABLED)
- #error Bluetooth is not enabled! Please run `make menuconfig` to and enable it
- #endif
+#if !defined(CONFIG_BT_ENABLED) || !defined(CONFIG_BLUEDROID_ENABLED)
+#error Bluetooth is not enabled! Please run `make menuconfig` to and enable it
+#endif
 BluetoothSerial SerialMon;
 #else
 #define SerialMon Serial
@@ -84,12 +84,39 @@ String getDefaultSensor(){
 	return "TEST DATA";
 }
 
+byte NTPServerSync(String server, byte timezone);
+
 void setupTime(){
-	configTime(0, 0, ntp_primary, ntp_secondary);
-	Serial.println("Waiting on time sync...");
-	while (time(nullptr) < 1510644967){
-		delay(10);
+	// TODO
+	//	if (WiFi.status() == WL_CONNECTED){
+	//		configTime(0, 0, ntp_primary, ntp_secondary);
+	//		Serial.println("Waiting on time sync...");
+	//		while (time(nullptr) < 1510644967){
+	//			delay(10);
+	//		}
+	//	}
+	SerialMon.println("Synchronize with ntp server");
+	if (NTPServerSync("pool.ntp.org", 2) < 0) {
+		SerialMon.println(" fail");
+	} else {
+		SerialMon.println(" success");
 	}
+
+	struct tm tm;
+	float timezone;
+
+	modem.getNetworkTime(&tm.tm_year, &tm.tm_mon, &tm.tm_mday,
+			&tm.tm_hour, &tm.tm_min, &tm.tm_sec, &timezone);
+
+	tm.tm_year -= 1900;
+	tm.tm_mon -= 1;
+	tm.tm_hour -= 2;
+
+	time_t t = mktime(&tm);
+
+	struct timeval tv = { .tv_sec = t };
+
+	settimeofday(&tv, NULL);
 }
 
 //bool publishTelemetry(String data){
@@ -158,6 +185,8 @@ void pass_command();
  * @brief Handle the SSL settings and connect to google iot core
  */
 bool connectCloudIoT() {
+
+	setupTime();
 	jwt = getJwt();
 
 	String client_id = device->getClientId();
@@ -236,11 +265,11 @@ bool connectCloudIoT() {
  */
 void enableGPS(void)
 {
-    // Set SIM7000G GPIO4 LOW ,turn on GPS power
-    // CMD:AT+SGPIO=0,4,1,1
-    // Only in version 20200415 is there a function to control GPS power
-    modem.sendAT("+SGPIO=0,4,1,1");
-    modem.enableGPS();
+	// Set SIM7000G GPIO4 LOW ,turn on GPS power
+	// CMD:AT+SGPIO=0,4,1,1
+	// Only in version 20200415 is there a function to control GPS power
+	modem.sendAT("+SGPIO=0,4,1,1");
+	modem.enableGPS();
 }
 
 /**
@@ -248,11 +277,11 @@ void enableGPS(void)
  */
 void disableGPS(void)
 {
-    // Set SIM7000G GPIO4 LOW ,turn off GPS power
-    // CMD:AT+SGPIO=0,4,1,0
-    // Only in version 20200415 is there a function to control GPS power
-    modem.sendAT("+SGPIO=0,4,1,0");
-    modem.disableGPS();
+	// Set SIM7000G GPIO4 LOW ,turn off GPS power
+	// CMD:AT+SGPIO=0,4,1,0
+	// Only in version 20200415 is there a function to control GPS power
+	modem.sendAT("+SGPIO=0,4,1,0");
+	modem.disableGPS();
 }
 
 /**
@@ -320,10 +349,10 @@ int modem_upload_cert(const char *cert, const char *name, int folder = 0)
  */
 void modemPowerOn()
 {
-    pinMode(MODEM_PWKEY, OUTPUT);
-    digitalWrite(MODEM_PWKEY, LOW);
-    delay(1000);    //Datasheet Ton mintues = 1S
-    digitalWrite(MODEM_PWKEY, HIGH);
+	pinMode(MODEM_PWKEY, OUTPUT);
+	digitalWrite(MODEM_PWKEY, LOW);
+	delay(1000);    //Datasheet Ton mintues = 1S
+	digitalWrite(MODEM_PWKEY, HIGH);
 }
 
 /**
@@ -331,10 +360,10 @@ void modemPowerOn()
  */
 void modemPowerOff()
 {
-    pinMode(MODEM_PWKEY, OUTPUT);
-    digitalWrite(MODEM_PWKEY, LOW);
-    delay(1500);    //Datasheet Ton mintues = 1.2S
-    digitalWrite(MODEM_PWKEY, HIGH);
+	pinMode(MODEM_PWKEY, OUTPUT);
+	digitalWrite(MODEM_PWKEY, LOW);
+	delay(1500);    //Datasheet Ton mintues = 1.2S
+	digitalWrite(MODEM_PWKEY, HIGH);
 }
 
 /**
@@ -342,9 +371,9 @@ void modemPowerOff()
  */
 void modemRestart()
 {
-    modemPowerOff();
-    delay(1000);
-    modemPowerOn();
+	modemPowerOff();
+	delay(1000);
+	modemPowerOn();
 }
 
 /**
@@ -357,9 +386,9 @@ byte NTPServerSync(String server = "pool.ntp.org", byte timezone = 1) {
 	modem.sendAT(GF("+CNTPCID=1"));
 	if (modem.waitResponse(10000L) != 1) { return -1; }
 
-	// Set NTP server and timezone
-	modem.sendAT(GF("+CNTP="), server, ',', String(timezone));
-	if (modem.waitResponse(10000L) != 1) { return -1; }
+	//// Set NTP server and timezone
+	//modem.sendAT(GF("+CNTP="), server, ',', String(timezone));
+	//if (modem.waitResponse(10000L) != 1) { return -1; }
 	return 1;
 }
 
@@ -369,7 +398,7 @@ byte NTPServerSync(String server = "pool.ntp.org", byte timezone = 1) {
 time_t getEpoch() {
 	if (!ntp_connected)
 	{
-		if (NTPServerSync("pool.ntp.org", 1) < 0) {
+		if (NTPServerSync("pool.ntp.org") < 0) {
 			SerialMon.println("NTP Failed");
 			ntp_connected = false;
 			return 0;
@@ -389,7 +418,8 @@ time_t getEpoch() {
  * @brief Create JWT token
  */
 String getJwt(){
-	iat = getEpoch();
+	//iat = getEpoch();
+	iat = time(nullptr);
 	Serial.println("Refreshing JWT");
 	jwt = device->createJWT(iat, jwt_exp_secs);
 	//Serial.println(jwt);
@@ -417,10 +447,10 @@ bool sendMqtt(String msg, String topic="events")
 			"\"," +
 			len +
 			",1,1");
-    if (modem.waitResponse(GF(">")) != 1) { return 0; }
-    modem.stream.write(msg.c_str(), len);
-    modem.stream.flush();
-    if (modem.waitResponse(GF("OK")) != 1) { 
+	if (modem.waitResponse(GF(">")) != 1) { return 0; }
+	modem.stream.write(msg.c_str(), len);
+	modem.stream.flush();
+	if (modem.waitResponse(GF("OK")) != 1) { 
 		pass_command();
 		return 0; }
 
@@ -453,6 +483,8 @@ void setup() {
 	SerialAT.begin(115200, SERIAL_8N1, MODEM_TX, MODEM_RX);
 	Wire.begin(21, 22); // I2C on Lilygo SIM7000
 
+	SerialMon.println(MODULE_HEADER);
+	SerialMon.println("Version: 0.0.1");
 	SerialMon.println("Checking temperature sensor");
 	if (!bme.begin(0x76)) {
 		Serial.println("Could not find a valid BMP280 sensor, check wiring!");
@@ -461,7 +493,7 @@ void setup() {
 	start = micros();
 
 	pinMode(LED_PIN, OUTPUT);
-	digitalWrite(LED_PIN, LOW);
+	digitalWrite(LED_PIN, HIGH);
 
 	SerialMon.println("Initializing modem...");
 
@@ -489,7 +521,6 @@ void setup() {
 	}
 	SerialMon.println(" success");
 
-	digitalWrite(LED_PIN, HIGH);
 
 	end = micros();
 	delta = end - start;
@@ -525,12 +556,13 @@ void setup() {
 
 	battpercent = modem.getBattPercent();
 	pressure = bme.readPressure();
-	epoch = getEpoch();
+	epoch = time(nullptr);
 	if (sht30.get() == 0) {
 		temp = sht30.cTemp;
 		hum = sht30.humidity;
 	}
 
+	digitalWrite(LED_PIN, LOW);
 	sendMqtt(String("{\"ts\":\"") +
 			String(epoch).c_str() +
 			"\",bat\":\"" +
@@ -541,6 +573,7 @@ void setup() {
 			String(hum).c_str() +
 			"\"}");
 
+	digitalWrite(LED_PIN, HIGH);
 	//modem.gprsDisconnect();
 	modem.poweroff();
 
