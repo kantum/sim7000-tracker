@@ -17,6 +17,7 @@
 
 #define LED_PIN 12
 
+#define TIME_TO_SLEEP  5           // Time ESP32 will go to sleep (in seconds)
 #define uS_TO_S_FACTOR 1000000ULL  // Conversion factor for ms to seconds
 
 //#define SERIAL_BLUETOOTH
@@ -449,10 +450,8 @@ bool sendMqtt(String msg, String topic="events")
 			",1,1");
 	if (modem.waitResponse(GF(">")) != 1) { return 0; }
 	modem.stream.write(msg.c_str(), len);
+	if (modem.waitResponse(GF("OK")) != 1) { return 0; }
 	modem.stream.flush();
-	if (modem.waitResponse(GF("OK")) != 1) { 
-		pass_command();
-		return 0; }
 
 	return 1;
 }
@@ -563,7 +562,7 @@ void setup() {
 	}
 
 	digitalWrite(LED_PIN, LOW);
-	sendMqtt(String("{\"ts\":\"") +
+	if (!sendMqtt(String("{\"ts\":\"") +
 			String(epoch).c_str() +
 			"\",bat\":\"" +
 			String(battpercent).c_str() +
@@ -571,11 +570,15 @@ void setup() {
 			String(temp).c_str() +
 			"\",\"hum\":\"" +
 			String(hum).c_str() +
-			"\"}");
+			"\"}")) {
+		SerialMon.println("Cannot send MQTT");
+	}
 
 	digitalWrite(LED_PIN, HIGH);
 	//modem.gprsDisconnect();
-	modem.poweroff();
+	//modem.sendAT(GF("+SMDISC"));
+	//modem.waitResponse();
+	//modem.poweroff();
 
 	//modem.enableGPS();
 
@@ -594,7 +597,12 @@ void setup() {
 
 	//disableGPS();
 
-	ESP.restart();
+	
+	esp_sleep_enable_timer_wakeup(TIME_TO_SLEEP * uS_TO_S_FACTOR);
+	delay(200);
+	SerialMon.println();
+	SerialMon.println(String("Going to sleep for ") + TIME_TO_SLEEP + " seconds");
+	esp_deep_sleep_start();
 
 	//	pass_command();
 
