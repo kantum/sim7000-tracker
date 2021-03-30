@@ -42,8 +42,8 @@ HardwareSerial serialGsm(1);
 #endif
 
 // See all AT commands, if wanted
-#define DUMP_AT_COMMANDS
-#define TINY_GSM_DEBUG SerialMon
+//#define DUMP_AT_COMMANDS
+//#define TINY_GSM_DEBUG SerialMon
 
 #ifdef DUMP_AT_COMMANDS
 #include <StreamDebugger.h>
@@ -55,7 +55,6 @@ TinyGsm modem(SerialAT);
 
 TinyGsmClientSecure client(modem);
 
-time_t epoch;
 bool ntp_connected = false;
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -96,7 +95,7 @@ void setupTime(){
 	//			delay(10);
 	//		}
 	//	}
-	SerialMon.println("Synchronize with ntp server");
+	SerialMon.print("Synchronize with ntp server");
 	if (NTPServerSync("pool.ntp.org", 2) < 0) {
 		SerialMon.println(" fail");
 	} else {
@@ -169,18 +168,32 @@ Adafruit_BMP280 bme;
 RTC_DATA_ATTR int update_certs = 1;
 
 /* Variables to mesure speed of functions */
-unsigned long start;
-unsigned long end;
+unsigned long connect_start;
+unsigned long connect_end;
 unsigned long delta;
 
-int battpercent;
-int pressure;
-int temp;
-int hum;
-float lat;
-float lon;
+struct Geo {
+	float lat;
+	float lon;
+};
+
+struct Data {
+	unsigned long connect_time;
+	time_t epoch;
+	int8_t battpercent;
+	uint8_t battChargeState;
+	uint16_t battMilliVolts;
+	int pressure;
+	int temp;
+	int hum;
+	struct Geo localisation;
+};
+
+struct Data data;
+
 String getJwt();
 void pass_command();
+
 
 /**
  * @brief Handle the SSL settings and connect to google iot core
@@ -195,7 +208,6 @@ bool connectCloudIoT() {
 	String port = "8883";
 	String keep_time = "60";
 
-	Serial.println(client_id);
 	SerialMon.println("Setting SSL");
 
 	modem.sendAT(String("+CSSLCFG=\"sslversion\",0,3"));
@@ -484,64 +496,65 @@ void setup() {
 
 	SerialMon.println(MODULE_HEADER);
 	SerialMon.println("Version: 0.0.1");
-	SerialMon.println("Checking temperature sensor");
 	if (!bme.begin(0x76)) {
 		Serial.println("Could not find a valid BMP280 sensor, check wiring!");
 	}
 
-	start = micros();
+	if (!modem.isNetworkConnected()) {
+		connect_start = micros();
 
-	pinMode(LED_PIN, OUTPUT);
-	digitalWrite(LED_PIN, HIGH);
+		pinMode(LED_PIN, OUTPUT);
+		digitalWrite(LED_PIN, HIGH);
 
-	SerialMon.println("Initializing modem...");
+		SerialMon.print("Initializing modem");
 
-	modemPowerOn();
+		modemPowerOn();
 
-	if (!modem.init()) {
-		modemRestart();
-		delay(2000);
+		if (!modem.init()) {
+			modemRestart();
+			delay(2000);
+		}
+
+		modem.setNetworkMode(38);
+		modem.setPreferredMode(1);
+		modem.sendAT(F("+CBANDCFG=\"CAT-M\","), 20);
+		modem.waitResponse();
+
+		while(!modem.isNetworkConnected()) {
+			Serial.print(".");
+			delay(10);
+		}
 	}
 
-	modem.setNetworkMode(38);
-	modem.setPreferredMode(1);
-	modem.sendAT(F("+CBANDCFG=\"CAT-M\","), 20);
+	if (!modem.isGprsConnected()) {
+		SerialMon.print("Connecting to " + String(apn));
+		while (!modem.gprsConnect(apn)) {
+			SerialMon.println(" fail");
+			SerialMon.print("Retrying");
+			modem.gprsDisconnect();
+		}
+		SerialMon.println(" success");
 
-	while(!modem.isNetworkConnected()) {
-		Serial.print(".");
+		connect_end = micros();
+		delta = connect_end - connect_start;
+		data.connect_time = (double)delta / uS_TO_S_FACTOR;
+	} else {
+			SerialMon.println("Gprs allready connected");
+		data.connect_time = 0;
 	}
-	Serial.println();
-
-	SerialMon.print("Connecting to " + String(apn) + " ");
-	while (!modem.gprsConnect(apn)) {
-		SerialMon.println(" fail");
-		SerialMon.print("Retrying");
-		modem.gprsDisconnect();
-	}
-	SerialMon.println(" success");
-
-
-	end = micros();
-	delta = end - start;
-	double connect_time = (double)delta / uS_TO_S_FACTOR;
-
-	Serial.println("");
-	Serial.print("Time to connect: ");
-	Serial.print(connect_time);
-	Serial.println(" seconds");
 
 	while (update_certs)
 	{
 		if (modem_upload_cert(root_cert, "ca.pem", 3) < 1) {
-			SerialMon.println("Upload Certificate failed");
+			SerialMon.println("Upload certificate failed");
 			continue;
 		}
 		if (modem_upload_cert(client_cert_mosquitto, "client.pem", 3) < 1) {
-			SerialMon.println("Upload Certificate failed");
+			SerialMon.println("Upload certificate failed");
 			continue;
 		}
 		if (modem_upload_cert(client_key_mosquitto, "client.key", 3) < 1) {
-			SerialMon.println("Upload Certificate failed");
+			SerialMon.println("Upload certificate failed");
 			continue;
 		}
 		update_certs = 0;
@@ -553,24 +566,40 @@ void setup() {
 		pass_command();
 	}
 
-	battpercent = modem.getBattPercent();
-	pressure = bme.readPressure();
-	epoch = time(nullptr);
-	if (sht30.get() == 0) {
-		temp = sht30.cTemp;
-		hum = sht30.humidity;
+	data.epoch = time(nullptr);
+	while (!modem.getBattStats(
+				data.battChargeState,
+				data.battpercent,
+				data.battMilliVolts)) {
+		SerialMon.println("Getting battery informations");
+		delay(1000);
 	}
+	data.pressure = bme.readPressure();
+	if (sht30.get() == 0) {
+		data.temp = sht30.cTemp;
+		data.hum = sht30.humidity;
+	}
+	SerialMon.println(String("epoch:              ") + data.epoch);
+	SerialMon.println(String("Connect time:       ") + data.connect_time);
+	SerialMon.println(String("Battery charging:   ") + data.battChargeState);
+	SerialMon.println(String("Battery percentage: ") + data.battpercent);
+	SerialMon.println(String("Battery voltage:    ") + data.battMilliVolts);
+	SerialMon.println(String("temperature:        ") + data.temp);
+	SerialMon.println(String("humidity:           ") + data.hum);
+	SerialMon.println(String("pressure:           ") + data.pressure);
 
 	digitalWrite(LED_PIN, LOW);
-	if (!sendMqtt(String("{\"ts\":\"") +
-			String(epoch).c_str() +
-			"\",bat\":\"" +
-			String(battpercent).c_str() +
-			"\",\"temp\":\"" +
-			String(temp).c_str() +
-			"\",\"hum\":\"" +
-			String(hum).c_str() +
-			"\"}")) {
+	if (!sendMqtt(
+				String("{\"ts\":") + data.epoch +
+				",\"gprsConnectTime\":" + data.connect_time +
+				",\"batCharging\":" + data.battChargeState +
+				",\"batVoltage\":" + data.battMilliVolts +
+				",\"batPercent\":" + data.battpercent +
+				",\"temperature\":" + data.temp +
+				",\"pressure\":" + data.pressure +
+				",\"humidity\":" + data.hum +
+				"}"))
+	{
 		SerialMon.println("Cannot send MQTT");
 	}
 
@@ -597,7 +626,7 @@ void setup() {
 
 	//disableGPS();
 
-	
+
 	esp_sleep_enable_timer_wakeup(TIME_TO_SLEEP * uS_TO_S_FACTOR);
 	delay(200);
 	SerialMon.println();
@@ -615,7 +644,6 @@ void setup() {
 
 	//publishTelemetry(getDefaultSensor());
 }
-
 
 void loop() {
 }
