@@ -190,6 +190,7 @@ struct Data {
 	time_t epoch;
 	uint8_t battChargeState;
 	uint16_t battMilliVolts;
+	uint16_t solarMilliVolts;
 	int pressure;
 	int temp;
 	int hum;
@@ -638,7 +639,6 @@ void setup() {
 	SerialMon.println(MODULE_HEADER);
 	SerialMon.println("Version: 0.0.1");
 	++bootCount;
-	Serial.println("Boot number: " + String(bootCount));
 
 	if (!bme.begin(0x76)) {
 		Serial.println("Could not find a valid BMP280 sensor, check wiring!");
@@ -715,10 +715,14 @@ void setup() {
 
 
 	tracker.battMilliVolts = 1;
+	tracker.solarMilliVolts = 1;
 
 	read_adc_bat(&tracker.battMilliVolts);
+	read_adc_solar(&tracker.solarMilliVolts);
 
 	tracker.battChargeState = tracker.battMilliVolts == 0 ? true : false;
+	if (tracker.solarMilliVolts > 4000)
+		tracker.battChargeState = true;
 
 	tracker.pressure = bme.readPressure();
 	if (sht30.get() == 0) {
@@ -745,9 +749,11 @@ void setup() {
 	//disableGPS();
 
 	SerialMon.println(String("epoch:              ") + tracker.epoch);
-	SerialMon.println(String("Connect time:       ") + tracker.connect_time);
-	SerialMon.println(String("Battery charging:   ") + tracker.battChargeState);
-	SerialMon.println(String("Battery voltage:    ") + tracker.battMilliVolts);
+	SerialMon.println(String("boot count:         ") + bootCount);
+	SerialMon.println(String("connect time:       ") + tracker.connect_time);
+	SerialMon.println(String("battery charging:   ") + tracker.battChargeState);
+	SerialMon.println(String("battery voltage:    ") + tracker.battMilliVolts);
+	SerialMon.println(String("solar voltage:      ") + tracker.solarMilliVolts);
 	SerialMon.println(String("temperature:        ") + tracker.temp);
 	SerialMon.println(String("humidity:           ") + tracker.hum);
 	SerialMon.println(String("pressure:           ") + tracker.pressure);
@@ -778,9 +784,11 @@ void setup() {
 	digitalWrite(LED_PIN, LOW);
 	if (!sendMqtt(
 				String("{\"ts\":") + tracker.epoch +
+				",\"bootCount\":" + bootCount +
 				",\"gprsConnectTime\":" + tracker.connect_time +
 				",\"batCharging\":" + tracker.battChargeState +
 				",\"batVoltage\":" + tracker.battMilliVolts +
+				",\"solVoltage\":" + tracker.solarMilliVolts +
 				",\"temperature\":" + tracker.temp +
 				",\"pressure\":" + tracker.pressure +
 				",\"humidity\":" + tracker.hum +
