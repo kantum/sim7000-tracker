@@ -15,6 +15,13 @@
 #define MODEM_TX 26
 #define MODEM_RX 27
 
+#define I2C_SDA 21
+#define I2C_SCL 22
+
+#define PIN_ADC_BAT 35
+#define PIN_ADC_SOLAR 36
+#define ADC_BATTERY_LEVEL_SAMPLES 100
+
 #define LED_PIN 12
 
 #define TIME_TO_SLEEP  5           // Time ESP32 will go to sleep (in seconds)
@@ -55,7 +62,8 @@ TinyGsm modem(SerialAT);
 
 TinyGsmClientSecure client(modem);
 
-bool ntp_connected = false;
+RTC_DATA_ATTR bool ntp_connected  = false;
+RTC_DATA_ATTR int bootCount = 0;   /* number of boots is saved even after esp is rebooted */
 
 ////////////////////////////////////////////////////////////////////////////////
 // From esp32-mqtt.h
@@ -180,19 +188,25 @@ struct Geo {
 struct Data {
 	unsigned long connect_time;
 	time_t epoch;
-	int8_t battpercent;
 	uint8_t battChargeState;
 	uint16_t battMilliVolts;
 	int pressure;
 	int temp;
 	int hum;
 	struct Geo localisation;
+	float lat;
+	float lon;
+	float alt;
+	float speed;
+	float accuracy;
 };
 
-struct Data data;
+struct Data tracker;
 
 String getJwt();
 void pass_command();
+void read_adc_solar(uint16_t *voltage);
+void read_adc_bat(uint16_t *voltage);
 
 
 /**
@@ -389,6 +403,103 @@ void modemRestart()
 	modemPowerOn();
 }
 
+void modemOff() {
+  //if you turn modem off while activating the fancy sleep modes it takes ~20sec, else its immediate
+  Serial.println("Going to sleep now with modem turned off");
+  //modem.gprsDisconnect();
+  //modem.radioOff();
+  modem.sleepEnable(false); // required in case sleep was activated and will apply after reboot
+  modem.poweroff();
+}
+
+/* @brief Set e-RX parameters
+** Mode options:
+** 0  Disable the use of eDRX
+** 1  Enable the use of eDRX
+** 2  Enable the use of eDRX and auto report
+** 3  Disable the use of eDRX(Reserved)
+**
+** Connection type options:
+** 4 - CAT-M
+** 5 - NB-IoT
+**
+** See AT command manual for eDRX values (options 0-15)
+** NOTE: Network must support eDRX mode
+*/
+boolean set_eDRX(uint8_t mode, uint8_t connType, char * eDRX_val) {
+	if (strlen(eDRX_val) > 4) return false;
+
+	char auxStr[21];
+
+	sprintf(auxStr, "AT+CEDRXS=%i,%i,\"%s\"", mode, connType, eDRX_val);
+
+	modem.stream.println(auxStr);
+	return (modem.waitResponse(GF("OK")) != 1 ? 0 : 1 );
+}
+
+/*
+** NOTE: Network must support PSM and modem needs to restart before it takes effect
+*/
+boolean enablePSM(bool onoff) {
+	modem.stream.println(String("AT+CPSMS=") + onoff);
+	return (modem.waitResponse(GF("OK")) != 1 ? 0 : 1 );
+}
+// Set PSM with custom TAU and active time
+// For both TAU and Active time, leftmost 3 bits represent the multiplier and rightmost 5 bits represent the value in bits.
+
+// For TAU, left 3 bits:
+// 000 10min
+// 001 1hr
+// 010 10hr
+// 011 2s
+// 100 30s
+// 101 1min
+// For Active time, left 3 bits:
+// 000 2s
+// 001 1min
+// 010 6min
+// 111 disabled
+
+// Note: Network decides the final value of the TAU and active time. 
+boolean enablePSM(bool onoff, char * TAU_val, char * activeTime_val) { // AT+CPSMS command
+    if (strlen(activeTime_val) > 8) return false;
+    if (strlen(TAU_val) > 8) return false;
+
+    char auxStr[35];
+    sprintf(auxStr, "AT+CPSMS=%i,,,\"%s\",\"%s\"", onoff, TAU_val, activeTime_val);
+
+	modem.stream.println(auxStr);
+	return (modem.waitResponse(GF("OK")) != 1 ? 0 : 1 );
+}
+
+// fancy low power mode - while connected
+// will have an effect after reboot and will replace normal power down
+void modemSleep() {
+  Serial.println("Going to sleep now with modem in power save mode");
+  // needs reboot to activa and takes ~20sec to sleep
+  while(!enablePSM(1)) {
+	  Serial.println("Cannot enable PSM, retrying");
+	  delay(100);
+  }
+  while(!set_eDRX(2, 4, (const char*)"1111")) {
+	  Serial.println("Cannot enable PSM, retrying");
+	  delay(100);
+  }
+  //modem.eDRX_mode14(); // https://github.com/botletics/SIM7000-LTE-Shield/wiki/Current-Consumption#e-drx-mode
+  modem.sleepEnable(); //will sleep (1.7mA), needs DTR or PWRKEY to wake
+  pinMode(MODEM_DTR, OUTPUT);
+  digitalWrite(MODEM_DTR, HIGH);
+}
+
+void modemWake() {
+  Serial.println("Wake up modem from sleep");
+  // DTR low to wake serial
+  pinMode(MODEM_DTR, OUTPUT);
+  digitalWrite(MODEM_DTR, LOW);
+  delay(50);
+  //wait_till_ready();
+}
+
 /**
  * @brief Sync ntp time with SIM7000 internal clock
  * @param server The NTP server address
@@ -483,6 +594,33 @@ void pass_command()
 		//delay(1);
 	}
 }
+
+void read_adc_bat(uint16_t *voltage)
+{
+	uint32_t in = 0;
+	for (int i = 0; i < ADC_BATTERY_LEVEL_SAMPLES; i++) {
+		in += (uint32_t)analogRead(PIN_ADC_BAT);
+	}
+	in = (int)in / ADC_BATTERY_LEVEL_SAMPLES;
+
+	uint16_t bat_mv = ((float)in / 4096) * 3600 * 2;
+
+	*voltage = bat_mv;
+}
+
+void read_adc_solar(uint16_t *voltage)
+{
+	uint32_t in = 0;
+	for (int i = 0; i < ADC_BATTERY_LEVEL_SAMPLES; i++) {
+		in += (uint32_t)analogRead(PIN_ADC_SOLAR);
+	}
+	in = (int)in / ADC_BATTERY_LEVEL_SAMPLES;
+
+	uint16_t bat_mv = ((float)in / 4096) * 3600 * 2;
+
+	*voltage = bat_mv;
+}
+
 ////////////////////////////////////////////////////////////////////////////////
 
 void setup() {
@@ -492,14 +630,21 @@ void setup() {
 	SerialMon.begin(115200);
 #endif
 	SerialAT.begin(115200, SERIAL_8N1, MODEM_TX, MODEM_RX);
-	Wire.begin(21, 22); // I2C on Lilygo SIM7000
+	Wire.begin(I2C_SDA, I2C_SCL);
+
+	pinMode(PIN_ADC_BAT, INPUT);
+	pinMode(PIN_ADC_SOLAR, INPUT);
 
 	SerialMon.println(MODULE_HEADER);
 	SerialMon.println("Version: 0.0.1");
+	++bootCount;
+	Serial.println("Boot number: " + String(bootCount));
+
 	if (!bme.begin(0x76)) {
 		Serial.println("Could not find a valid BMP280 sensor, check wiring!");
 	}
 
+	modemWake();
 	if (!modem.isNetworkConnected()) {
 		connect_start = micros();
 
@@ -537,10 +682,10 @@ void setup() {
 
 		connect_end = micros();
 		delta = connect_end - connect_start;
-		data.connect_time = (double)delta / uS_TO_S_FACTOR;
+		tracker.connect_time = (double)delta / uS_TO_S_FACTOR;
 	} else {
-			SerialMon.println("Gprs allready connected");
-		data.connect_time = 0;
+		SerialMon.println("Gprs allready connected");
+		tracker.connect_time = 0;
 	}
 
 	while (update_certs)
@@ -563,41 +708,87 @@ void setup() {
 
 	while(!connectCloudIoT()) {
 		SerialMon.println("Cannot connect to google, retrying...");
-		pass_command();
+		//pass_command();
 	}
 
-	data.epoch = time(nullptr);
-	while (!modem.getBattStats(
-				data.battChargeState,
-				data.battpercent,
-				data.battMilliVolts)) {
-		SerialMon.println("Getting battery informations");
-		delay(1000);
-	}
-	data.pressure = bme.readPressure();
+	tracker.epoch = time(nullptr);
+
+
+	tracker.battMilliVolts = 1;
+
+	read_adc_bat(&tracker.battMilliVolts);
+
+	tracker.battChargeState = tracker.battMilliVolts == 0 ? true : false;
+
+	tracker.pressure = bme.readPressure();
 	if (sht30.get() == 0) {
-		data.temp = sht30.cTemp;
-		data.hum = sht30.humidity;
+		tracker.temp = sht30.cTemp;
+		tracker.hum = sht30.humidity;
 	}
-	SerialMon.println(String("epoch:              ") + data.epoch);
-	SerialMon.println(String("Connect time:       ") + data.connect_time);
-	SerialMon.println(String("Battery charging:   ") + data.battChargeState);
-	SerialMon.println(String("Battery percentage: ") + data.battpercent);
-	SerialMon.println(String("Battery voltage:    ") + data.battMilliVolts);
-	SerialMon.println(String("temperature:        ") + data.temp);
-	SerialMon.println(String("humidity:           ") + data.hum);
-	SerialMon.println(String("pressure:           ") + data.pressure);
+
+	enableGPS();
+	tracker.lat = 0.0000;
+	tracker.lon = 0.0000;
+	tracker.alt = 0.0000;
+	tracker.speed = 0.0000;
+	tracker.accuracy = 0.0000;
+
+	int vsat;
+	int usat;
+	Serial.println("Checking GPS");
+	if (modem.getGPS(&tracker.lat, &tracker.lon, &tracker.speed, &tracker.alt, &vsat, &usat, &tracker.accuracy)) {
+		Serial.println("The location has been locked:");
+	} else {
+		Serial.println("No GPS data yet");
+	}
+
+	//disableGPS();
+
+	SerialMon.println(String("epoch:              ") + tracker.epoch);
+	SerialMon.println(String("Connect time:       ") + tracker.connect_time);
+	SerialMon.println(String("Battery charging:   ") + tracker.battChargeState);
+	SerialMon.println(String("Battery voltage:    ") + tracker.battMilliVolts);
+	SerialMon.println(String("temperature:        ") + tracker.temp);
+	SerialMon.println(String("humidity:           ") + tracker.hum);
+	SerialMon.println(String("pressure:           ") + tracker.pressure);
+	SerialMon.println(String("lat:                ") + String(tracker.lat, 7));
+	SerialMon.println(String("lon:                ") + String(tracker.lon, 7));
+	SerialMon.println(String("alt:                ") + tracker.alt);
+	SerialMon.println(String("speed:              ") + tracker.speed);
+	SerialMon.println(String("accuracy:           ") + tracker.accuracy);
+	SerialMon.println(String("vsat:               ") + vsat);
+	SerialMon.println(String("usat:               ") + usat);
+
+	//int gps_checks = 0;
+
+	//while (gps_checks < 10) {
+	//	if (modem.getGPS(&tracker.lat, &tracker.lon)) {
+	//		Serial.println("The location has been locked, the latitude and longitude are:");
+	//		Serial.print("latitude:"); Serial.println(tracker.lat);
+	//		Serial.print("longitude:"); Serial.println(tracker.lon);
+	//		gps_checks = 0;
+	//		break;
+	//	}
+	//	gps_checks++;
+	//	delay(1000);
+	//}
+
+	////disableGPS();
 
 	digitalWrite(LED_PIN, LOW);
 	if (!sendMqtt(
-				String("{\"ts\":") + data.epoch +
-				",\"gprsConnectTime\":" + data.connect_time +
-				",\"batCharging\":" + data.battChargeState +
-				",\"batVoltage\":" + data.battMilliVolts +
-				",\"batPercent\":" + data.battpercent +
-				",\"temperature\":" + data.temp +
-				",\"pressure\":" + data.pressure +
-				",\"humidity\":" + data.hum +
+				String("{\"ts\":") + tracker.epoch +
+				",\"gprsConnectTime\":" + tracker.connect_time +
+				",\"batCharging\":" + tracker.battChargeState +
+				",\"batVoltage\":" + tracker.battMilliVolts +
+				",\"temperature\":" + tracker.temp +
+				",\"pressure\":" + tracker.pressure +
+				",\"humidity\":" + tracker.hum +
+				",\"lat\":" + String(tracker.lat, 7) +
+				",\"lon\":" + String(tracker.lon, 7) +
+				",\"alt\":" + tracker.alt +
+				",\"speed\":" + tracker.speed +
+				",\"accuracy\":" + tracker.accuracy +
 				"}"))
 	{
 		SerialMon.println("Cannot send MQTT");
@@ -609,24 +800,9 @@ void setup() {
 	//modem.waitResponse();
 	//modem.poweroff();
 
-	//modem.enableGPS();
+	//pass_command();
 
-	//int gps_checks = 0;
-	//while (gps_checks < 30) {
-	//    if (modem.getGPS(&lat, &lon)) {
-	//        Serial.println("The location has been locked, the latitude and longitude are:");
-	//        Serial.print("latitude:"); Serial.println(lat);
-	//        Serial.print("longitude:"); Serial.println(lon);
-	//		gps_checks = 0;
-	//        break;
-	//    }
-	//	gps_checks++;
-	//	delay(1000);
-	//}
-
-	//disableGPS();
-
-
+	modemSleep();
 	esp_sleep_enable_timer_wakeup(TIME_TO_SLEEP * uS_TO_S_FACTOR);
 	delay(200);
 	SerialMon.println();
