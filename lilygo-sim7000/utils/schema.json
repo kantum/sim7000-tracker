@@ -1,0 +1,92 @@
+[
+	{
+		"name": "deviceId",
+		"type": "STRING",
+		"mode": "NULLABLE"
+	},
+	{
+		"name": "timestamp",
+		"type": "TIMESTAMP",
+		"mode": "NULLABLE"
+	},
+	{
+		"name": "ts",
+		"type": "TIMESTAMP",
+		"mode": "NULLABLE"
+	},
+	{
+		"name": "bootCount",
+		"type": "INTEGER",
+		"mode": "NULLABLE"
+	},
+	{
+		"name": "gprsConnectTime",
+		"type": "INTEGER",
+		"mode": "NULLABLE"
+	},
+	{
+		"name": "batCharging",
+		"type": "BOOLEAN",
+		"mode": "NULLABLE"
+	},
+	{
+		"name": "batVoltage",
+		"type": "INTEGER",
+		"mode": "NULLABLE"
+	},
+	{
+		"name": "solVoltage",
+		"type": "INTEGER",
+		"mode": "NULLABLE"
+	},
+	{
+		"name": "lowBattery",
+		"type": "BOOLEAN",
+		"mode": "NULLABLE"
+	},
+	{
+		"name": "veryLowBattery",
+		"type": "BOOLEAN",
+		"mode": "NULLABLE"
+	},
+	{
+		"name": "temperature",
+		"type": "INTEGER",
+		"mode": "NULLABLE"
+	},
+	{
+		"name": "pressure",
+		"type": "INTEGER",
+		"mode": "NULLABLE"
+	},
+	{
+		"name": "humidity",
+		"type": "INTEGER",
+		"mode": "NULLABLE"
+	},
+	{
+		"name": "lat",
+		"type": "FLOAT",
+		"mode": "NULLABLE"
+	},
+	{
+		"name": "lon",
+		"type": "FLOAT",
+		"mode": "NULLABLE"
+	},
+	{
+		"name": "alt",
+		"type": "FLOAT",
+		"mode": "NULLABLE"
+	},
+	{
+		"name": "speed",
+		"type": "FLOAT",
+		"mode": "NULLABLE"
+	},
+	{
+		"name": "accuracy",
+		"type": "FLOAT",
+		"mode": "NULLABLE"
+	}
+]
