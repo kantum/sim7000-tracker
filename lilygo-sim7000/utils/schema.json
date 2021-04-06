@@ -26,7 +26,7 @@
 	},
 	{
 		"name": "batCharging",
-		"type": "BOOLEAN",
+		"type": "BOOL",
 		"mode": "NULLABLE"
 	},
 	{
@@ -41,12 +41,12 @@
 	},
 	{
 		"name": "lowBattery",
-		"type": "BOOLEAN",
+		"type": "BOOL",
 		"mode": "NULLABLE"
 	},
 	{
 		"name": "veryLowBattery",
-		"type": "BOOLEAN",
+		"type": "BOOL",
 		"mode": "NULLABLE"
 	},
 	{
@@ -87,6 +87,16 @@
 	{
 		"name": "accuracy",
 		"type": "FLOAT",
+		"mode": "NULLABLE"
+	},
+	{
+		"name": "gpsLocked",
+		"type": "BOOL",
+		"mode": "NULLABLE"
+	},
+	{
+		"name": "gpsEnabled",
+		"type": "BOOL",
 		"mode": "NULLABLE"
 	}
 ]

@@ -22,8 +22,8 @@
 
 #define TIME_TO_SLEEP  4           // Time ESP32 will go to sleep (in seconds)
 #define TIME_TO_SLEEP_LOW_BAT 10 * 60
-#define uS_TO_S_FACTOR 1000000ULL  // Conversion factor for ms to seconds
-#define MS_TO_S_FACTOR 1000ULL  // Conversion factor for ms to seconds
+#define uS_TO_S_FACTOR 1000000ULL
+#define MS_TO_S_FACTOR 1000ULL
 
 //#define SERIAL_BLUETOOTH
 
@@ -70,6 +70,9 @@ TinyGsm modem(SerialAT);
 #include <Adafruit_BMP280.h>
 #include "SHT3X.h"
 
+#include <ArduinoJson.h>
+#include "Tracker.h"
+
 byte	NTPServerSync(String server, byte timezone);
 void	setupTime();
 String	getJwt();
@@ -92,6 +95,10 @@ void	modemWake();
 bool	sendMqtt(String msg, String topic = "events");
 void	checkPower(uint32_t alert = 3400, uint32_t min = 3000);
 bool	modemLight(bool onoff);
+void	setJsonState(Tracker *tracker, DynamicJsonDocument *state);
+void	setData(Tracker *tracker);
+void	sendData(Tracker *tracker);
+void	sendState(DynamicJsonDocument *state);
 
 TinyGsmClientSecure client(modem);
 Client *netClient;
@@ -100,10 +107,11 @@ MQTTClient *mqttClient;
 SHT3X sht30(0x44);
 Adafruit_BMP280 bme;
 
-RTC_DATA_ATTR bool ntp_connected  = false;
-RTC_DATA_ATTR bool veryLowBatteryCheck  = false;
+RTC_DATA_ATTR bool ntp_connected = false;
+RTC_DATA_ATTR bool veryLowBatteryCheck = false;
 RTC_DATA_ATTR int bootCount = 0;
 RTC_DATA_ATTR bool update_certs = true;
+RTC_DATA_ATTR bool gpsEnabled = false;
 
 String jwt;
 
@@ -115,47 +123,10 @@ unsigned long delta;
 int vsat;
 int usat;
 
-struct Geo {
-	float lat;
-	float lon;
-};
+//Tracker tracker;
 
-struct Data {
-	unsigned long connectTime;
-	time_t timestamp;
-	bool battChargeState;
-	uint16_t battMilliVolts;
-	uint16_t solarMilliVolts;
-	int pressure;
-	int temp;
-	int hum;
-	struct Geo localisation;
-	float lat;
-	float lon;
-	float alt;
-	float speed;
-	float accuracy;
-	bool lowBattery;
-	bool veryLowBattery;
-};
-
-struct Data tracker;
-
+Tracker *tracker = new Tracker;
 void setup() {
-	checkPower(3400, 3300);
-	if (tracker.veryLowBattery) {
-		if (veryLowBatteryCheck) {
-			modemPowerOff();
-			esp_sleep_enable_timer_wakeup(
-					TIME_TO_SLEEP_LOW_BAT * uS_TO_S_FACTOR);
-			delay(200);
-			SerialMon.println(String("Going to sleep for ") +
-					TIME_TO_SLEEP_LOW_BAT + " seconds");
-			esp_deep_sleep_start();
-		} else {
-			veryLowBatteryCheck = true;
-		}
-	}
 #ifdef SERIAL_BLUETOOTH
 	SerialMon.begin(MODULE_NAME);
 #else
@@ -171,10 +142,26 @@ void setup() {
 	SerialMon.println("Version: 0.0.1");
 	++bootCount;
 
+	DynamicJsonDocument trackerState(1024);
+
 	if (!bme.begin(0x76)) {
 		Serial.println("Could not find a valid BMP280 sensor, check wiring!");
 	}
 
+	checkPower(3400, 3000);
+	if (tracker->veryLowBattery) {
+		if (veryLowBatteryCheck) {
+			modemPowerOff();
+			esp_sleep_enable_timer_wakeup(
+					TIME_TO_SLEEP_LOW_BAT * uS_TO_S_FACTOR);
+			delay(200);
+			SerialMon.println(String("Going to sleep for ") +
+					TIME_TO_SLEEP_LOW_BAT + " seconds");
+			esp_deep_sleep_start();
+		} else {
+			veryLowBatteryCheck = true;
+		}
+	}
 	modemWake();
 
 	connect_start = micros();
@@ -216,7 +203,7 @@ void setup() {
 	}
 	connect_end = micros();
 	delta = connect_end - connect_start;
-	tracker.connectTime = (double)delta / MS_TO_S_FACTOR;
+	tracker->connectTime = (double)delta / MS_TO_S_FACTOR;
 
 	modemLight(true);
 
@@ -244,83 +231,14 @@ void setup() {
 		SerialMon.println("Cannot connect to google, retrying...");
 		//pass_command();
 	}
+	setData(tracker); // TODO return true or false
 
-/*//////////////////////////////////////////////////////////////////////////////
-//////////////////////////////// Get data  /////////////////////////////////////
-//////////////////////////////////////////////////////////////////////////////*/
+	setJsonState(tracker, &trackerState);
 
-	tracker.timestamp = iat;
+	serializeJsonPretty(trackerState, SerialMon);
+	SerialMon.println();
 
-	read_adc_bat(&tracker.battMilliVolts);
-	read_adc_solar(&tracker.solarMilliVolts);
-
-	tracker.battChargeState = tracker.battMilliVolts == 0 ? true : false;
-	if (tracker.solarMilliVolts > 4000)
-		tracker.battChargeState = true;
-
-	tracker.pressure = bme.readPressure();
-	if (sht30.get() == 0) {
-		tracker.temp = sht30.cTemp;
-		tracker.hum = sht30.humidity;
-	}
-
-	enableGPS();
-	tracker.lat = 0.0000;
-	tracker.lon = 0.0000;
-	tracker.alt = 0.0000;
-	tracker.speed = 0.0000;
-	tracker.accuracy = 0.0000;
-
-	Serial.println("Checking GPS");
-	if (modem.getGPS(&tracker.lat, &tracker.lon, &tracker.speed, &tracker.alt,
-				&vsat, &usat, &tracker.accuracy)) {
-		Serial.println("The location has been locked:");
-	} else {
-		Serial.println("No GPS data yet");
-	}
-
-	SerialMon.println(String("ts:                 ") + tracker.timestamp);
-	SerialMon.println(String("boot count:         ") + bootCount);
-	SerialMon.println(String("connect time:       ") + tracker.connectTime);
-	SerialMon.println(String("battery charging:   ") + tracker.battChargeState);
-	SerialMon.println(String("battery voltage:    ") + tracker.battMilliVolts);
-	SerialMon.println(String("solar voltage:      ") + tracker.solarMilliVolts);
-	SerialMon.println(String("low battery:        ") + tracker.lowBattery ? "true" : "false");
-	SerialMon.println(String("very low battery:   ") + tracker.veryLowBattery);
-	SerialMon.println(String("temperature:        ") + tracker.temp);
-	SerialMon.println(String("pressure:           ") + tracker.pressure);
-	SerialMon.println(String("humidity:           ") + tracker.hum);
-	SerialMon.println(String("lat:                ") + String(tracker.lat, 7));
-	SerialMon.println(String("lon:                ") + String(tracker.lon, 7));
-	SerialMon.println(String("alt:                ") + tracker.alt);
-	SerialMon.println(String("speed:              ") + tracker.speed);
-	SerialMon.println(String("accuracy:           ") + tracker.accuracy);
-	SerialMon.println(String("vsat:               ") + vsat);
-	SerialMon.println(String("usat:               ") + usat);
-
-	digitalWrite(LED_PIN, LOW);
-	if (!sendMqtt(
-				String("{\"ts\":") + tracker.timestamp +
-				",\"bootCount\":" + bootCount +
-				",\"gprsConnectTime\":" + tracker.connectTime +
-				",\"batCharging\":" + (tracker.battChargeState ? "true" : "false") +
-				",\"batVoltage\":" + tracker.battMilliVolts +
-				",\"solVoltage\":" + tracker.solarMilliVolts +
-				",\"lowBattery\":" + (tracker.lowBattery ? "true" : "false") +
-				",\"veryLowBattery\":" + (tracker.veryLowBattery ? "true" : "false") +
-				",\"temperature\":" + tracker.temp +
-				",\"pressure\":" + tracker.pressure +
-				",\"humidity\":" + tracker.hum +
-				",\"lat\":" + String(tracker.lat, 7) +
-				",\"lon\":" + String(tracker.lon, 7) +
-				",\"alt\":" + tracker.alt +
-				",\"speed\":" + tracker.speed +
-				",\"accuracy\":" + tracker.accuracy +
-				"}"))
-	{
-		SerialMon.println("Cannot send MQTT");
-	}
-	digitalWrite(LED_PIN, HIGH);
+	sendState(&trackerState);
 
 	modemSleep();
 	esp_sleep_enable_timer_wakeup(TIME_TO_SLEEP * uS_TO_S_FACTOR);
@@ -332,6 +250,7 @@ void setup() {
 
 void loop() {
 }
+
 /**
  * @brief Setup the internal clock with modem and NTP
  */
@@ -551,6 +470,9 @@ void modemRestart() {
 	modemPowerOn();
 }
 
+/**
+ * @brief Turn modem off
+ */
 void modemOff() {
 	//if you turn modem off while activating the fancy sleep modes it takes ~20sec, else its immediate
 	Serial.println("Going to sleep now with modem turned off");
@@ -585,33 +507,37 @@ boolean set_eDRX(uint8_t mode, uint8_t connType, char * eDRX_val) {
 	return (modem.waitResponse(GF("OK")) != 1 ? 0 : 1 );
 }
 
-/*
- ** NOTE: Network must support PSM and modem needs to restart before it takes effect
+/**
+ * @brief Enable Power Saving Mode
+ * NOTE: Network must support PSM and modem needs to restart before it takes effect
  */
 boolean enablePSM(bool onoff) {
 	modem.stream.println(String("AT+CSCLK=1"));
 	modem.stream.println(String("AT+CPSMS=") + onoff);
 	return (modem.waitResponse(GF("OK")) != 1 ? 0 : 1 );
 }
-// Set PSM with custom TAU and active time
-// For both TAU and Active time, leftmost 3 bits represent the multiplier and rightmost 5 bits represent the value in bits.
 
-// For TAU, left 3 bits:
-// 000 10min
-// 001 1hr
-// 010 10hr
-// 011 2s
-// 100 30s
-// 101 1min
-//
-// For Active time, left 3 bits:
-// 000 2s
-// 001 1min
-// 010 6min
-// 111 disabled
-
-// Note: Network decides the final value of the TAU and active time. 
-boolean enablePSM(bool onoff, char * TAU_val, char * activeTime_val) { // AT+CPSMS command
+/**
+ * @brief Set PSM with custom TAU and active time
+ * For both TAU and Active time, leftmost 3 bits represent the multiplier and rightmost 5 bits represent the value in bits.
+ *
+ * For TAU, left 3 bits:
+ * 000 10min
+ * 001 1hr
+ * 010 10hr
+ * 011 2s
+ * 100 30s
+ * 101 1min
+ *
+ * For Active time, left 3 bits:
+ * 000 2s
+ * 001 1min
+ * 010 6min
+ * 111 disabled
+ *
+ * Note: Network decides the final value of the TAU and active time. 
+ */
+boolean enablePSM(bool onoff, char * TAU_val, char * activeTime_val) {
 	if (strlen(activeTime_val) > 8) return false;
 	if (strlen(TAU_val) > 8) return false;
 
@@ -624,9 +550,11 @@ boolean enablePSM(bool onoff, char * TAU_val, char * activeTime_val) { // AT+CPS
 	return (modem.waitResponse(GF("OK")) != 1 ? 0 : 1 );
 }
 
-// fancy low power mode - while connected
-// will have an effect after reboot and will replace normal power down
-void modemSleep() {
+/**
+ * @brief Low power mode - while connected
+ * will have an effect after reboot and will replace normal power down
+ */
+void modemSleep(void) {
 	Serial.println("Going to sleep now with modem in power save mode");
 	// needs reboot to activa and takes ~20sec to sleep
 	while(!enablePSM(1, "01100010", "00000001")) {
@@ -646,7 +574,7 @@ void modemSleep() {
 /**
  * @brief Wake modem from sleep with DTR pin
  */
-void modemWake() {
+void modemWake(void) {
 	Serial.println("Wake up modem from sleep");
 	pinMode(MODEM_DTR, OUTPUT);
 	digitalWrite(MODEM_DTR, LOW);
@@ -672,7 +600,7 @@ byte NTPServerSync(String server = "pool.ntp.org", byte timezone = 1) {
 /**
  * @brief Create JWT token
  */
-String getJwt() {
+String getJwt(void) {
 	iat = time(nullptr);
 	Serial.println("Refreshing JWT");
 	jwt = device->createJWT(iat, jwt_exp_secs);
@@ -711,7 +639,7 @@ bool sendMqtt(String msg, String topic) {
 /**
  * @brief UART passthrough
  */
-void pass_command() {
+void pass_command(void) {
 	SerialAT.println("ate");
 	while (true) {
 		if (SerialAT.available())
@@ -722,6 +650,10 @@ void pass_command() {
 	}
 }
 
+/**
+ * @brief Read ADC of battery pin
+ * @param voltage Pointer to where to write the value 
+ */
 void read_adc_bat(uint16_t *voltage) {
 	uint32_t in = 0;
 	for (int i = 0; i < ADC_BATTERY_LEVEL_SAMPLES; i++) {
@@ -734,6 +666,10 @@ void read_adc_bat(uint16_t *voltage) {
 	*voltage = bat_mv;
 }
 
+/**
+ * @brief Read ADC of solar pin
+ * @param voltage Pointer to where to write the value 
+ */
 void read_adc_solar(uint16_t *voltage) {
 	uint32_t in = 0;
 	for (int i = 0; i < ADC_BATTERY_LEVEL_SAMPLES; i++) {
@@ -746,22 +682,95 @@ void read_adc_solar(uint16_t *voltage) {
 	*voltage = bat_mv;
 }
 
+/**
+ * @brief Check if power is high enough and set the values accordingly
+ * @param alert Voltage when we might want to start lower the power consuption
+ * @param min Voltage when the module should sleep a very long time
+ */
 void checkPower(uint32_t alert, uint32_t min) {
 	pinMode(PIN_ADC_BAT, INPUT);
-	read_adc_bat(&tracker.battMilliVolts);
-	if (tracker.battMilliVolts <= alert && tracker.battMilliVolts > 0)
+	read_adc_bat(&tracker->batVoltage);
+	if (tracker->batVoltage <= alert && tracker->batVoltage > 0)
 	{
-		tracker.lowBattery = true;
-		if (tracker.battMilliVolts <= min)
-			tracker.veryLowBattery = true;
+		tracker->lowBattery = true;
+		if (tracker->batVoltage <= min)
+			tracker->veryLowBattery = true;
 	} else {
-		tracker.lowBattery = false;
-		tracker.veryLowBattery = false;
+		tracker->lowBattery = false;
+		tracker->veryLowBattery = false;
 	}
-
 }
 
+/**
+ * @brief Set SIM7000 network lights off
+ * @param onoff 
+ */
 bool modemLight(bool onoff) {
 	modem.sendAT(F("+CSGS="), onoff);
 	return (modem.waitResponse(GF("OK")) != 1 ? 0 : 1 );
+}
+
+/**
+ * @brief Set tracker's variables
+ * @param tracker Pointer to data
+ */
+void setData(Tracker *tracker) {
+	tracker->timestamp = iat;
+	tracker->bootCount = bootCount;
+	read_adc_bat(&tracker->batVoltage);
+	read_adc_solar(&tracker->solVoltage);
+	tracker->batCharging = tracker->batVoltage == 0 ? true : false;
+	if (tracker->solVoltage > 4000)
+		tracker->batCharging = true;
+	if (sht30.get() == 0) {
+		tracker->temp = sht30.cTemp;
+		tracker->hum = sht30.humidity;
+	}
+	tracker->pressure = bme.readPressure();
+	tracker->gpsEnabled = gpsEnabled;
+	if (!tracker->gpsEnabled) {
+		enableGPS();
+		tracker->gpsEnabled = true;
+	}
+	if (modem.getGPS(&tracker->lat, &tracker->lon, &tracker->speed,
+				&tracker->alt, &vsat, &usat, &tracker->accuracy)) {
+		tracker->gpsLocked = true;
+	} else {
+		tracker->gpsLocked = false;
+	}
+}
+
+/**
+ * @brief Make a Json with data
+ * @param tracker Pointer to Tracker object
+ * @param state Pointer to json document
+ */
+void setJsonState(Tracker *tracker, DynamicJsonDocument *state) {
+	state[0]["ts"] = tracker->timestamp;
+	state[0]["bootCount"] = tracker->bootCount;
+	state[0]["batVoltage"] = tracker->batVoltage;
+	state[0]["solVoltage"] = tracker->solVoltage;
+	state[0]["batCharging"] = tracker->batCharging;
+	state[0]["temperature"] = tracker->temp;
+	state[0]["humidity"] = tracker->hum;
+	state[0]["pressure"] = tracker->pressure;
+	state[0]["lat"] = tracker->lat;
+	state[0]["lon"] = tracker->lon;
+	state[0]["alt"] = tracker->alt;
+	state[0]["speed"] = tracker->speed;
+	state[0]["accuracy"] = tracker->accuracy;
+	state[0]["gpsLocked"] = tracker->gpsLocked;
+	state[0]["gpsEnabled"] = tracker->gpsEnabled;
+}
+
+/**
+ * @brief Send Tracker's data
+ * @param state Pointer to json document
+ */
+void	sendState(DynamicJsonDocument *state) {
+	String s;
+	serializeJson(*state, s);
+	if (!sendMqtt(s)) {
+		SerialMon.println("Cannot send MQTT");
+	}
 }
