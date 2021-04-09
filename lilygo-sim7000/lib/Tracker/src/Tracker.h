@@ -22,8 +22,6 @@
 #define MODEM_PWKEY 4
 #define MODEM_DTR 25
 
-#define CONNECT_ATTEMPTS 1
-
 #define PIN_ADC_BAT 35
 #define PIN_ADC_SOLAR 36
 #define ADC_BATTERY_LEVEL_SAMPLES 100
@@ -91,28 +89,42 @@ class Tracker
 		String	getJwt();
 		void	read_adc_solar(uint16_t *voltage);
 		void	read_adc_bat(uint16_t *voltage);
-		int		modem_upload_cert(const char *cert, const char *name, int folder);
+		int		modem_upload_cert(
+				const char *cert, const char *name, int folder);
 		bool	sendMqtt(const char *msg, const char *topic = "events",
 				int qos = 1, bool retain = 1);
 		bool	mqttSub(const char *topic, int qos);
-		void	checkPower(uint32_t alert = 3400, uint32_t min = 3000);
+		void	checkPower(void);
 		bool	modemLight(bool onoff);
 		bool	getData(void);
 		void	setState(DynamicJsonDocument *state);
 		void	sendState(DynamicJsonDocument *state);
 		bool	mqttReceive(const char *topic, String *data, int timeout = 5);
+		bool	mqttDisconnect(void);
+		//bool	mqttConfig(void); // TODO
+		//bool	mqttConnect(void); // TODO
+		//bool	mqttUnSub(void); // TODO
 
-		int bootCount;
-		unsigned long gprsConnectTime;
+		struct config {
+			uint8_t refreshTime = 10;
+			uint8_t lowBatRefreshTime = 60;
+			uint8_t modemConnectAttempts = 10;
+			uint8_t networkConnectAttempts = 20;
+			uint8_t gprsConnectAttempts = 10;
+			uint8_t psmEnableAttempts = 2;
+			uint8_t cloudConnectAttempts = 10;
+			uint32_t lowBatThreshold = 3400;
+			uint32_t veryLowBatThreshold = 3200;
+		};
+
+		uint32_t bootCount;
+		uint32_t gprsConnectTime;
 		time_t timestamp;
-		bool batCharging;
 		uint16_t batVoltage;
 		uint16_t solVoltage;
-		int pressure;
-		int temp;
-		int hum;
-		bool gpsEnabled;
-		bool gpsLocked;
+		uint16_t pressure;
+		int8_t temp;
+		uint8_t hum;
 		float lat;
 		float lon;
 		float alt;
@@ -120,11 +132,19 @@ class Tracker
 		float accuracy;
 		int vsat;
 		int usat;
+
+		bool gpsEnabled;
+		bool gpsLocked;
+		bool batCharging;
 		bool lowBattery;
 		bool veryLowBattery;
-		bool networkConnected;
-		bool gprsConnected;
-		bool gcloudConnected;
+		bool networkConnected = false;
+		bool gprsConnected = false;
+		bool cloudConnected = false;
+		bool mqttConnected = false;
+
+		config config;
+
 	private:
 };
 
