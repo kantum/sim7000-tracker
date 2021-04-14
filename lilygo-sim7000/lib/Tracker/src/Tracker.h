@@ -14,6 +14,8 @@
 #include <CloudIoTCoreMqtt.h>
 
 #include <ArduinoJson.h>
+#include "FS.h"
+#include <LITTLEFS.h>
 
 #define TINY_GSM_MODEM_SIM7000
 #include <TinyGsmClient.h>
@@ -45,7 +47,8 @@ extern TinyGsm modem;
 
 extern RTC_DATA_ATTR bool ntp_connected;
 extern RTC_DATA_ATTR bool gps_enabled;
-extern RTC_DATA_ATTR int boot_count;
+extern RTC_DATA_ATTR uint32_t boot_count;
+extern RTC_DATA_ATTR uint32_t saved_states;
 
 extern String jwt;
 extern unsigned long iat;
@@ -62,7 +65,7 @@ extern SHT3X sht30;
 
 #include <Adafruit_Sensor.h>
 #include <Adafruit_BMP280.h>
-extern Adafruit_BMP280 bme;
+extern Adafruit_BMP280 bmp;
 
 class Tracker
 {
@@ -76,9 +79,10 @@ class Tracker
 		void	modemPowerOff();
 		void	modemRestart();
 		void	modemOff();
-		bool	set_eDRX(uint8_t mode, uint8_t connType, char * eDRX_val);
+		bool	set_eDRX(uint8_t mode, uint8_t connType, const char * eDRX_val);
 		bool	enablePSM(bool onoff);
-		bool	enablePSM(bool onoff, char * TAU_val, char * activeTime_val);
+		bool	enablePSM(
+				bool onoff, const char * TAU_val, const char * activeTime_val);
 		void	modemSleep();
 		void	modemWake();
 		byte	NTPServerSync(
@@ -98,23 +102,28 @@ class Tracker
 		bool	modemLight(bool onoff);
 		bool	getData(void);
 		void	setState(DynamicJsonDocument *state);
-		void	sendState(DynamicJsonDocument *state);
+		bool	sendState(DynamicJsonDocument *state);
 		bool	mqttReceive(const char *topic, String *data, int timeout = 5);
 		bool	mqttDisconnect(void);
 		//bool	mqttConfig(void); // TODO
 		//bool	mqttConnect(void); // TODO
 		//bool	mqttUnSub(void); // TODO
+		void	setConfig(DynamicJsonDocument *json);
+		bool	saveFile(DynamicJsonDocument *json, const char *filepath);
+		bool	loadFile(DynamicJsonDocument *json,
+				const char *filepath, uint32_t maxsize);
 
 		struct config {
 			uint8_t refreshTime = 10;
 			uint8_t lowBatRefreshTime = 60;
+			uint32_t lowBatThreshold = 3400;
+			uint32_t veryLowBatThreshold = 3200;
 			uint8_t modemConnectAttempts = 10;
-			uint8_t networkConnectAttempts = 20;
+			uint8_t networkConnectAttempts = 10;
 			uint8_t gprsConnectAttempts = 10;
 			uint8_t psmEnableAttempts = 2;
 			uint8_t cloudConnectAttempts = 10;
-			uint32_t lowBatThreshold = 3400;
-			uint32_t veryLowBatThreshold = 3200;
+			uint16_t nSaveState = 100;
 		};
 
 		uint32_t bootCount;
@@ -123,6 +132,7 @@ class Tracker
 		uint16_t batVoltage;
 		uint16_t solVoltage;
 		uint16_t pressure;
+		uint32_t savedStates;
 		int8_t temp;
 		uint8_t hum;
 		float lat;
@@ -142,6 +152,7 @@ class Tracker
 		bool gprsConnected = false;
 		bool cloudConnected = false;
 		bool mqttConnected = false;
+		bool dataLost = false;
 
 		config config;
 

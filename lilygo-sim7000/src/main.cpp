@@ -50,20 +50,23 @@ TinyGsm modem(SerialAT);
 #endif
 
 #include <ArduinoJson.h>
+#include "FS.h"
+#include <LITTLEFS.h>
 #include "Tracker.h"
 #include "ciotc_config.h" // Update this file with your configuration
 
 TinyGsmClientSecure client(modem);
 CloudIoTCoreDevice *device;
 SHT3X sht30(0x44);
-Adafruit_BMP280 bme;
+Adafruit_BMP280 bmp;
 
 RTC_DATA_ATTR bool ntp_connected = false;
 RTC_DATA_ATTR bool very_low_battery_check = false;
-RTC_DATA_ATTR int boot_count = 0;
+RTC_DATA_ATTR uint32_t boot_count = 0;
 RTC_DATA_ATTR bool update_certs = true;
 RTC_DATA_ATTR bool gps_enabled = false;
 RTC_DATA_ATTR bool mqtt_connected = false;
+RTC_DATA_ATTR uint32_t saved_states = 0;
 
 String jwt;
 
@@ -96,7 +99,12 @@ void setup() {
 	SerialMon.println("Version: 0.0.1");
 	++boot_count;
 
-	if (!bme.begin(0x76)) {
+	Serial.println("Mounting FS...");
+	if (!LITTLEFS.begin()) {
+		Serial.println("Failed to mount file system");
+	}
+
+	if (!bmp.begin(0x76)) {
 		Serial.println("Could not find a valid BMP280 sensor, check wiring!");
 	}
 
@@ -149,7 +157,7 @@ void setup() {
 		retry = tracker->config.networkConnectAttempts + 1;
 		while(!modem.isNetworkConnected() && --retry) {
 			SerialMon.print(".");
-			delay(1000);
+			delay(500);
 		}
 		if (retry) {
 			SerialMon.println(" success");
@@ -193,23 +201,25 @@ void setup() {
 
 	tracker->modemLight(true);
 
-	while (update_certs)
-	{
-		if (tracker->modem_upload_cert(root_cert, "ca.pem", 3) < 1) {
-			SerialMon.println("Upload certificate failed");
-			continue;
+	if (tracker->networkConnected) {
+		while (update_certs)
+		{
+			if (tracker->modem_upload_cert(root_cert, "ca.pem", 3) < 1) {
+				SerialMon.println("Upload certificate failed");
+				continue;
+			}
+			if (tracker->modem_upload_cert(
+						client_cert_mosquitto, "client.pem", 3) < 1) {
+				SerialMon.println("Upload certificate failed");
+				continue;
+			}
+			if (tracker->modem_upload_cert(
+						client_key_mosquitto, "client.key", 3) < 1) {
+				SerialMon.println("Upload certificate failed");
+				continue;
+			}
+			update_certs = false;
 		}
-		if (tracker->modem_upload_cert(
-					client_cert_mosquitto, "client.pem", 3) < 1) {
-			SerialMon.println("Upload certificate failed");
-			continue;
-		}
-		if (tracker->modem_upload_cert(
-					client_key_mosquitto, "client.key", 3) < 1) {
-			SerialMon.println("Upload certificate failed");
-			continue;
-		}
-		update_certs = false;
 	}
 
 	tracker->mqttConnected = mqtt_connected;
@@ -231,6 +241,11 @@ void setup() {
 
 	DynamicJsonDocument trackerConfig(1024);
 
+	if (!tracker->loadFile(&trackerConfig, "/config.json", 1024)) {
+		Serial.println("Failed to load config");
+	} else {
+		Serial.println("Config loaded");
+	}
 	if (tracker->cloudConnected) {
 		if (!tracker->mqttSub("config", 1)) {
 			SerialMon.println("Cannot subscribe");
@@ -241,33 +256,81 @@ void setup() {
 		if (!tracker->mqttReceive("config", &configStr, 30)) {
 			SerialMon.println("Cannot receive config");
 		} else {
-			SerialMon.print("Config received");
+			SerialMon.println("Config received");
 		}
 		configStr = configStr.substring(1, configStr.length() -2);
 		deserializeJson(trackerConfig, configStr);
 	}
+	tracker->setConfig(&trackerConfig);
 
-	DynamicJsonDocument trackerState(1024);
-
-	SerialMon.print("Data collection:");
-	if (tracker->getData()) {
-		SerialMon.println("All data gathered");
+	if (!tracker->saveFile(&trackerConfig, "/config.json")) {
+		Serial.println("Failed to save config");
 	} else {
-		SerialMon.println("Some data missing");
+		Serial.println("Config saved");
 	}
 
+	DynamicJsonDocument trackerState(2048);
+
+	tracker->getData();
 	tracker->setState(&trackerState);
 
-	serializeJsonPretty(trackerConfig, SerialMon);
-	SerialMon.println();
 	serializeJsonPretty(trackerState, SerialMon);
 	SerialMon.println();
 
-	if (tracker->cloudConnected) {
-		tracker->sendState(&trackerState);
-	} else {
-		// TODO Save state
+	uint32_t bufSize =
+		trackerState.memoryUsage() * (tracker->config.nSaveState + 2); // TODO be more precise than adding an arbitrary 2
+	DynamicJsonDocument buffer(bufSize);
+
+	if (saved_states) {
+		if (!tracker->loadFile(&buffer, "/states.json", bufSize)) {
+			Serial.println("Failed to load states");
+		} else {
+			Serial.println("Loading saved states");
+		}
+		if (saved_states >= tracker->config.nSaveState) {
+			tracker->dataLost = true;
+			buffer.remove(0);
+			saved_states--;
+		}
 	}
+
+	if (!buffer.add(trackerState)) {
+		Serial.println("Warning !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
+	} else {
+		saved_states++;
+	}
+
+	Serial.print("saved_states ");
+	Serial.println(saved_states);
+
+
+	for (int i = 0; i <= saved_states; i++) {
+		DynamicJsonDocument tmp(1024);
+		tmp = buffer[i].as<JsonObject>();
+
+		if (!tracker->sendState(&tmp)) {
+			break;
+		} else {
+			Serial.println(i);
+			buffer.remove(0);
+			saved_states--;
+		}
+	}
+	if (saved_states == 0) {
+		tracker->dataLost = false;
+	}
+	if (!tracker->saveFile(&buffer, "/states.json")) {
+		Serial.println("Failed to save states");
+	} else {
+		Serial.println("Saving states");
+	}
+
+	serializeJsonPretty(buffer, Serial);
+	Serial.println();
+	Serial.print("saved_states ");
+	Serial.println(saved_states);
+	Serial.print("dataLost ");
+	Serial.println(tracker->dataLost);
 
 	tracker->mqttDisconnect();
 	tracker->modemSleep();

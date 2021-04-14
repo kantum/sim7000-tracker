@@ -87,7 +87,7 @@ void Tracker::modemOff() {
  ** See AT command manual for eDRX values (options 0-15)
  ** NOTE: Network must support eDRX mode
  */
-boolean Tracker::set_eDRX(uint8_t mode, uint8_t connType, char * eDRX_val) {
+boolean Tracker::set_eDRX(uint8_t mode, uint8_t connType, const char * eDRX_val) {
 	if (strlen(eDRX_val) > 4) return false;
 
 	char auxStr[21];
@@ -128,7 +128,7 @@ boolean Tracker::enablePSM(bool onoff) {
  *
  * Note: Network decides the final value of the TAU and active time. 
  */
-boolean Tracker::enablePSM(bool onoff, char * TAU_val, char * activeTime_val) {
+boolean Tracker::enablePSM(bool onoff, const char * TAU_val, const char * activeTime_val) {
 	if (strlen(activeTime_val) > 8) return false;
 	if (strlen(TAU_val) > 8) return false;
 
@@ -241,7 +241,7 @@ void Tracker::setupTime(){
 /**
  * @brief Handle the SSL settings and connect to google iot core
  */
-bool Tracker::connectCloudIoT() {
+bool Tracker::connectCloudIoT() { // TODO Add timeout
 	setupTime();
 	jwt = getJwt();
 
@@ -307,7 +307,7 @@ bool Tracker::connectCloudIoT() {
 	if (modem.waitResponse(30000L) != 1) {return 0;}
 
 	modem.sendAT(GF("+SMCONN"));
-	if (modem.waitResponse(30000L) != 1) {return 0;}
+	if (modem.waitResponse(5000L) != 1) {return 0;}
 
 	SerialMon.println("OK");
 	return 1;
@@ -555,12 +555,14 @@ bool Tracker::modemLight(bool onoff) {
  * @param tracker Pointer to data
  */
 bool Tracker::getData(void) {
+	bool ret = true;
 	timestamp = time(nullptr);
 	if (timestamp < 1617808583) {
 		SerialMon.println("Timestamp error");
-		return false;
+		ret = false;
 	}
 	bootCount = boot_count;
+	savedStates = saved_states;
 	//read_adc_bat(&batVoltage);
 	batCharging = batVoltage == 0 ? true : false;
 	read_adc_solar(&solVoltage);
@@ -571,9 +573,9 @@ bool Tracker::getData(void) {
 		hum = sht30.humidity;
 	} else {
 		SerialMon.println("Env error");
-		return false;
+		ret = false;
 	}
-	pressure = bme.readPressure();
+	pressure = bmp.readPressure();
 	//if (!gps_enabled) {
 	enableGPS();
 	gps_enabled = true;
@@ -590,14 +592,75 @@ bool Tracker::getData(void) {
 		speed = 0;
 		accuracy = 0;
 		SerialMon.println("GPS error");
+		ret = false;
+	}
+	return ret;
+}
+
+/**
+ * @brief Save actual config to littlefs
+ * @param json Pointer to json document
+ * @param filepath File's path on the filesystem
+ */
+bool Tracker::saveFile(DynamicJsonDocument *json, const char *filepath) {
+	File file = LITTLEFS.open(filepath, "w");
+	if (!file) {
+		Serial.println("Failed to open file for writing");
+		return false;
+	}
+	if (serializeJson(json[0], file) == 0) {
+		Serial.println(F("Failed to write to file"));
+	}
+	file.close();
+	return true;
+}
+
+/**
+ * @brief Load config from filesystem
+ * @param json Pointer to json document
+ * @param filepath File's path on the filesystem
+ */
+bool Tracker::loadFile(DynamicJsonDocument *json, const char *filepath, uint32_t maxsize) {
+	File file = LITTLEFS.open(filepath, "r");
+	if (!file) {
+		Serial.println("Failed to open file");
+		return false;
+	}
+	auto error = deserializeJson(json[0], file);
+	if (error) {
+		Serial.println("Failed to parse config file");
 		return false;
 	}
 	return true;
 }
 
 /**
+ * @brief Set configuration variables from json document
+ * @param json Pointer to json document
+ */
+void Tracker::setConfig(DynamicJsonDocument *json) {
+	if (json[0].containsKey("refreshTime"))
+		config.refreshTime = json[0]["refreshTime"];
+	if (json[0].containsKey("lowBatRefreshTime"))
+		config.lowBatRefreshTime = json[0]["lowBatRefreshTime"];
+	if (json[0].containsKey("lowBatThreshold"))
+		config.lowBatThreshold = json[0]["lowBatThreshold"];
+	if (json[0].containsKey("veryLowBatThreshold"))
+		config.veryLowBatThreshold = json[0]["veryLowBatThreshold"];
+	if (json[0].containsKey("modemConnectAttempts"))
+		config.modemConnectAttempts = json[0]["modemConnectAttempts"];
+	if (json[0].containsKey("networkConnectAttempts"))
+		config.networkConnectAttempts = json[0]["networkConnectAttempts"];
+	if (json[0].containsKey("gprsConnectAttempts"))
+		config.gprsConnectAttempts = json[0]["gprsConnectAttempts"];
+	if (json[0].containsKey("psmEnableAttempts"))
+		config.psmEnableAttempts = json[0]["psmEnableAttempts"];
+	if (json[0].containsKey("cloudConnectAttempts"))
+		config.cloudConnectAttempts = json[0]["cloudConnectAttempts"];
+}
+
+/**
  * @brief Make a Json with data
- * @param tracker Pointer to Tracker object
  * @param state Pointer to json document
  */
 void Tracker::setState(DynamicJsonDocument *state) {
@@ -625,10 +688,16 @@ void Tracker::setState(DynamicJsonDocument *state) {
  * @brief Send Tracker's data
  * @param state Pointer to json document
  */
-void	Tracker::sendState(DynamicJsonDocument *state) {
+bool	Tracker::sendState(DynamicJsonDocument *state) {
 	String s;
 	serializeJson(*state, s);
-	if (!sendMqtt(s.c_str())) {
+	if (!sendMqtt(s.c_str(),"events")) {
 		SerialMon.println("Cannot send MQTT");
+		return false;
 	}
+	//if (!sendMqtt(s.c_str(),"state")) {
+	//	SerialMon.println("Cannot send MQTT");
+	//	return false;
+	//}
+	return true;
 }
