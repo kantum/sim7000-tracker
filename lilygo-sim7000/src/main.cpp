@@ -55,6 +55,7 @@ RTC_DATA_ATTR bool update_certs = true;
 RTC_DATA_ATTR bool gps_enabled = false;
 RTC_DATA_ATTR bool mqtt_connected = false;
 RTC_DATA_ATTR uint32_t saved_states = 0;
+RTC_DATA_ATTR bool data_lost = 0;
 
 String jwt;
 
@@ -272,7 +273,7 @@ void setup() {
 			Serial.println("Loading saved states");
 		}
 		if (saved_states >= tracker->config.nSaveState) {
-			tracker->dataLost = true;
+			data_lost = true;
 			buffer.remove(0);
 			saved_states--;
 		}
@@ -283,10 +284,6 @@ void setup() {
 	} else {
 		saved_states++;
 	}
-
-	Serial.print("saved_states ");
-	Serial.println(saved_states);
-
 
 	for (int i = 0; i <= saved_states; i++) {
 		DynamicJsonDocument tmp(1024);
@@ -301,7 +298,7 @@ void setup() {
 		}
 	}
 	if (saved_states == 0) {
-		tracker->dataLost = false;
+		data_lost = false;
 	}
 	if (!tracker->saveFile(&buffer, "/states.json")) {
 		Serial.println("Failed to save states");
@@ -311,10 +308,6 @@ void setup() {
 
 	serializeJsonPretty(buffer, Serial);
 	Serial.println();
-	Serial.print("saved_states ");
-	Serial.println(saved_states);
-	Serial.print("dataLost ");
-	Serial.println(tracker->dataLost);
 
 	tracker->mqttDisconnect();
 	tracker->modemSleep();

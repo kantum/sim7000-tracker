@@ -37,6 +37,7 @@ extern RTC_DATA_ATTR bool ntp_connected;
 extern RTC_DATA_ATTR bool gps_enabled;
 extern RTC_DATA_ATTR uint32_t boot_count;
 extern RTC_DATA_ATTR uint32_t saved_states;
+extern RTC_DATA_ATTR bool data_lost;
 
 extern String jwt;
 extern unsigned long iat;
@@ -121,7 +122,7 @@ class Tracker
 		uint16_t solVoltage;
 		float pressure;
 		uint32_t savedStates;
-		int8_t temp;
+		int16_t temp;
 		uint8_t hum;
 		float lat;
 		float lon;

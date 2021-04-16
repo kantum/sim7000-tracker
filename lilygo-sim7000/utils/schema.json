@@ -56,7 +56,7 @@
 	},
 	{
 		"name": "pressure",
-		"type": "INTEGER",
+		"type": "FLOAT",
 		"mode": "NULLABLE"
 	},
 	{
@@ -96,6 +96,16 @@
 	},
 	{
 		"name": "gpsEnabled",
+		"type": "BOOL",
+		"mode": "NULLABLE"
+	},
+	{
+		"name": "savedStates",
+		"type": "INTEGER",
+		"mode": "NULLABLE"
+	},
+	{
+		"name": "dataLost",
 		"type": "BOOL",
 		"mode": "NULLABLE"
 	}

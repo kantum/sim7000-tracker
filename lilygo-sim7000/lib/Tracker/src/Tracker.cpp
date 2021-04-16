@@ -518,6 +518,7 @@ bool Tracker::getData(void) {
 	}
 	bootCount = boot_count;
 	savedStates = saved_states;
+	dataLost = data_lost;
 	//read_adc_bat(&batVoltage);
 	batCharging = batVoltage == 0 ? true : false;
 	read_adc_solar(&solVoltage);
@@ -531,10 +532,10 @@ bool Tracker::getData(void) {
 		ret = false;
 	}
 	pressure = bmp.readPressure();
-	if (!gps_enabled) {
+	//if (!gps_enabled) {
 	enableGPS();
 	gps_enabled = true;
-	}
+	//}
 	gpsEnabled = gps_enabled;
 	if (modem.getGPS(&lat, &lon, &speed,
 				&alt, &vsat, &usat, &accuracy)) {
@@ -637,6 +638,8 @@ void Tracker::setState(DynamicJsonDocument *state) {
 	state[0]["gpsEnabled"] = gpsEnabled;
 	state[0]["lowBattery"] = lowBattery;
 	state[0]["veryLowBattery"] = veryLowBattery;
+	state[0]["savedStates"] = savedStates;
+	state[0]["dataLost"] = dataLost;
 }
 
 /**
