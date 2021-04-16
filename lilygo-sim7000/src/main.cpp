@@ -263,7 +263,7 @@ void setup() {
 	Serial.println();
 
 	uint32_t bufSize =
-		trackerState.memoryUsage() * (tracker->config.nSaveState + 2); // TODO be more precise than adding an arbitrary 2
+		trackerState.memoryUsage() * (tracker->config.maxSavedStates + 2); // TODO be more precise than adding an arbitrary 2
 	DynamicJsonDocument buffer(bufSize);
 
 	if (saved_states) {
@@ -272,7 +272,7 @@ void setup() {
 		} else {
 			Serial.println("Loading saved states");
 		}
-		if (saved_states >= tracker->config.nSaveState) {
+		if (saved_states >= tracker->config.maxSavedStates) {
 			data_lost = true;
 			buffer.remove(0);
 			saved_states--;

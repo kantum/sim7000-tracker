@@ -112,7 +112,7 @@ class Tracker
 			uint8_t gprsConnectAttempts = 10;
 			uint8_t psmEnableAttempts = 2;
 			uint8_t cloudConnectAttempts = 10;
-			uint16_t nSaveState = 100;
+			uint16_t maxSavedStates = 100;
 		};
 
 		uint32_t bootCount;

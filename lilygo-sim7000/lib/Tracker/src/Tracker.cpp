@@ -613,6 +613,8 @@ void Tracker::setConfig(DynamicJsonDocument *json) {
 		config.psmEnableAttempts = json[0]["psmEnableAttempts"];
 	if (json[0].containsKey("cloudConnectAttempts"))
 		config.cloudConnectAttempts = json[0]["cloudConnectAttempts"];
+	if (json[0].containsKey("maxSavedStates"))
+		config.maxSavedStates = json[0]["maxSavedStates"];
 }
 
 /**
