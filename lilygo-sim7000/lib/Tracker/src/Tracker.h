@@ -28,18 +28,6 @@
 #define PIN_ADC_SOLAR 36
 #define ADC_BATTERY_LEVEL_SAMPLES 100
 
-#ifdef SERIAL_BLUETOOTH
-#define RX_QUEUE_SIZE 512
-#define TX_QUEUE_SIZE 32
-#include "BluetoothSerial.h"
-#if !defined(CONFIG_BT_ENABLED) || !defined(CONFIG_BLUEDROID_ENABLED)
-#error Bluetooth is not enabled! Please run `make menuconfig` to and enable it
-#endif
-extern BluetoothSerial SerialMon;
-#else
-#define SerialMon Serial
-#endif
-
 extern HardwareSerial serialGsm;
 #define SerialAT serialGsm
 
@@ -131,7 +119,7 @@ class Tracker
 		time_t timestamp;
 		uint16_t batVoltage;
 		uint16_t solVoltage;
-		uint16_t pressure;
+		float pressure;
 		uint32_t savedStates;
 		int8_t temp;
 		uint8_t hum;

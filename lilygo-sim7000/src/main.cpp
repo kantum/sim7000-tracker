@@ -18,18 +18,6 @@
 
 //#define SERIAL_BLUETOOTH
 
-#ifdef SERIAL_BLUETOOTH
-# define RX_QUEUE_SIZE 512
-# define TX_QUEUE_SIZE 32
-# include "BluetoothSerial.h"
-# if !defined(CONFIG_BT_ENABLED) || !defined(CONFIG_BLUEDROID_ENABLED)
-#  error Bluetooth is not enabled! Please run `make menuconfig` to and enable it
-# endif
-BluetoothSerial SerialMon;
-#else
-# define SerialMon Serial
-#endif
-
 HardwareSerial serialGsm(1);
 #define SerialAT serialGsm
 
@@ -39,11 +27,11 @@ HardwareSerial serialGsm(1);
 
 // See all AT commands, if wanted
 //#define DUMP_AT_COMMANDS
-#define TINY_GSM_DEBUG SerialMon
+#define TINY_GSM_DEBUG Serial
 
 #ifdef DUMP_AT_COMMANDS
 #include <StreamDebugger.h>
-StreamDebugger debugger(SerialAT, SerialMon);
+StreamDebugger debugger(SerialAT, Serial);
 TinyGsm        modem(debugger);
 #else
 TinyGsm modem(SerialAT);
@@ -81,11 +69,7 @@ unsigned long delta;
 Tracker *tracker = new Tracker;
 
 void setup() {
-#ifdef SERIAL_BLUETOOTH
-	SerialMon.begin(MODULE_NAME);
-#else
-	SerialMon.begin(115200);
-#endif
+	Serial.begin(115200);
 	SerialAT.begin(115200, SERIAL_8N1, MODEM_TX, MODEM_RX);
 	Wire.begin(I2C_SDA, I2C_SCL);
 
@@ -95,8 +79,8 @@ void setup() {
 	pinMode(LED_PIN, OUTPUT);
 	digitalWrite(LED_PIN, HIGH);
 
-	SerialMon.println(MODULE_HEADER);
-	SerialMon.println("Version: 0.0.1");
+	Serial.println(MODULE_HEADER);
+	Serial.println("Version: 0.0.1");
 	++boot_count;
 
 	Serial.println("Mounting FS...");
@@ -117,7 +101,7 @@ void setup() {
 			int32_t sleep =
 				tracker->config.lowBatRefreshTime * uS_TO_S_FACTOR - micros();
 			if (sleep < 0) { sleep = 1; }
-			SerialMon.println(String("Going to sleep for ") +
+			Serial.println(String("Going to sleep for ") +
 					sleep + " microseconds");
 			delay(200);
 			esp_sleep_enable_timer_wakeup(sleep);
@@ -133,37 +117,37 @@ void setup() {
 	connect_start = micros();
 
 	if (!modem.isNetworkConnected()) {
-		SerialMon.print("Initializing modem");
+		Serial.print("Initializing modem");
 		tracker->modemPowerOn();
 		retry = tracker->config.modemConnectAttempts + 1;
 		while (!modem.init() && --retry) {
-			SerialMon.println(" failed");
-			SerialMon.print("retrying");
+			Serial.println(" failed");
+			Serial.print("retrying");
 			tracker->modemRestart();
 			delay(2000);
 		}
 		if (retry) {
-			SerialMon.println(" success");
+			Serial.println(" success");
 		} else {
-			SerialMon.println(" failed");
-			SerialMon.println("Check the sim card");
+			Serial.println(" failed");
+			Serial.println("Check the sim card");
 		}
 
-		SerialMon.print("Connect to network");
+		Serial.print("Connect to network");
 		modem.setNetworkMode(38);
 		modem.setPreferredMode(1);
 		modem.sendAT(F("+CBANDCFG=\"CAT-M\","), 20);
 		modem.waitResponse();
 		retry = tracker->config.networkConnectAttempts + 1;
 		while(!modem.isNetworkConnected() && --retry) {
-			SerialMon.print(".");
+			Serial.print(".");
 			delay(500);
 		}
 		if (retry) {
-			SerialMon.println(" success");
+			Serial.println(" success");
 			tracker->networkConnected = true;
 		} else {
-			SerialMon.println(" failed");
+			Serial.println(" failed");
 			tracker->networkConnected = false;
 		}
 	} else {
@@ -171,28 +155,28 @@ void setup() {
 	}
 
 	if (!modem.isGprsConnected() && tracker->networkConnected) {
-		SerialMon.print("Connecting to " + String(apn));
+		Serial.print("Connecting to " + String(apn));
 		retry = tracker->config.gprsConnectAttempts + 1;
 		while (!modem.gprsConnect(apn) && --retry) {
-			SerialMon.println(" fail");
-			SerialMon.print("Retrying");
+			Serial.println(" fail");
+			Serial.print("Retrying");
 			modem.gprsDisconnect();
 			tracker->gprsConnected = false;
 		}
 		if (retry) {
-			SerialMon.println(" success");
+			Serial.println(" success");
 			tracker->gprsConnected = true;
 		} else {
-			SerialMon.println(" failed");
+			Serial.println(" failed");
 			tracker->gprsConnected = true;
 		}
 	} else {
 		if (tracker->networkConnected)
 		{
-			SerialMon.println("Gprs allready connected");
+			Serial.println("Gprs allready connected");
 			tracker->gprsConnected = true;
 		} else {
-			SerialMon.println("No Network, continuing");
+			Serial.println("No Network, continuing");
 		}
 	}
 	connect_end = micros();
@@ -205,17 +189,17 @@ void setup() {
 		while (update_certs)
 		{
 			if (tracker->modem_upload_cert(root_cert, "ca.pem", 3) < 1) {
-				SerialMon.println("Upload certificate failed");
+				Serial.println("Upload certificate failed");
 				continue;
 			}
 			if (tracker->modem_upload_cert(
 						client_cert_mosquitto, "client.pem", 3) < 1) {
-				SerialMon.println("Upload certificate failed");
+				Serial.println("Upload certificate failed");
 				continue;
 			}
 			if (tracker->modem_upload_cert(
 						client_key_mosquitto, "client.key", 3) < 1) {
-				SerialMon.println("Upload certificate failed");
+				Serial.println("Upload certificate failed");
 				continue;
 			}
 			update_certs = false;
@@ -232,7 +216,7 @@ void setup() {
 		retry = tracker->config.cloudConnectAttempts + 1;
 		retry = 1;
 		while(!tracker->connectCloudIoT() && --retry) {
-			SerialMon.println("Cannot connect to google, retrying...");
+			Serial.println("Cannot connect to google, retrying...");
 		}
 		tracker->cloudConnected = (retry  ? true : false);
 	}
@@ -248,15 +232,15 @@ void setup() {
 	}
 	if (tracker->cloudConnected) {
 		if (!tracker->mqttSub("config", 1)) {
-			SerialMon.println("Cannot subscribe");
+			Serial.println("Cannot subscribe");
 		} else {
-			SerialMon.println("Subscribed");
+			Serial.println("Subscribed");
 		}
 		String configStr;
 		if (!tracker->mqttReceive("config", &configStr, 30)) {
-			SerialMon.println("Cannot receive config");
+			Serial.println("Cannot receive config");
 		} else {
-			SerialMon.println("Config received");
+			Serial.println("Config received");
 		}
 		configStr = configStr.substring(1, configStr.length() -2);
 		deserializeJson(trackerConfig, configStr);
@@ -274,8 +258,8 @@ void setup() {
 	tracker->getData();
 	tracker->setState(&trackerState);
 
-	serializeJsonPretty(trackerState, SerialMon);
-	SerialMon.println();
+	serializeJsonPretty(trackerState, Serial);
+	Serial.println();
 
 	uint32_t bufSize =
 		trackerState.memoryUsage() * (tracker->config.nSaveState + 2); // TODO be more precise than adding an arbitrary 2
@@ -337,7 +321,7 @@ void setup() {
 	int32_t sleep = tracker->config.refreshTime * uS_TO_S_FACTOR - micros();
 	if (sleep < 0)
 		sleep = 1;
-	SerialMon.println(String("Going to sleep for ") +
+	Serial.println(String("Going to sleep for ") +
 			sleep + " microseconds");
 	esp_sleep_enable_timer_wakeup(sleep);
 	esp_deep_sleep_start();

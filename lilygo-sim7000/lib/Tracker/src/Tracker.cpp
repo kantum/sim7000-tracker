@@ -89,11 +89,8 @@ void Tracker::modemOff() {
  */
 boolean Tracker::set_eDRX(uint8_t mode, uint8_t connType, const char * eDRX_val) {
 	if (strlen(eDRX_val) > 4) return false;
-
 	char auxStr[21];
-
 	sprintf(auxStr, "AT+CEDRXS=%i,%i,\"%s\"", mode, connType, eDRX_val);
-
 	modem.stream.println(auxStr);
 	return (modem.waitResponse(GF("OK")) != 1 ? 0 : 1 );
 }
@@ -131,13 +128,10 @@ boolean Tracker::enablePSM(bool onoff) {
 boolean Tracker::enablePSM(bool onoff, const char * TAU_val, const char * activeTime_val) {
 	if (strlen(activeTime_val) > 8) return false;
 	if (strlen(TAU_val) > 8) return false;
-
 	modem.stream.println(String("AT+CSCLK=1"));
-
 	char auxStr[35];
 	sprintf(auxStr, "AT+CPSMS=%i,,,\"%s\",\"%s\"",
 			onoff, TAU_val, activeTime_val);
-
 	modem.stream.println(auxStr);
 	return (modem.waitResponse(GF("OK")) != 1 ? 0 : 1 );
 }
@@ -157,9 +151,9 @@ void Tracker::modemSleep(void) {
 		delay(100);
 	}
 	if (retry) {
-		SerialMon.println(" success");
+		Serial.println(" success");
 	} else {
-		SerialMon.println(" failed");
+		Serial.println(" failed");
 	}
 
 	// https://github.com/botletics/SIM7000-LTE-Shield/wiki/Current-Consumption#e-drx-mode
@@ -191,7 +185,6 @@ byte Tracker::NTPServerSync(String server, byte timezone) {
 	// Set GPRS bearer profile to associate with NTP sync
 	modem.sendAT(GF("+CNTPCID=1"));
 	if (modem.waitResponse(10000L) != 1) { return -1; }
-
 	// Set NTP server and timezone
 	modem.sendAT(GF("+CNTP="), server, ',', String(timezone));
 	if (modem.waitResponse(GF("OK")) != 1) { return -1; }
@@ -204,23 +197,21 @@ byte Tracker::NTPServerSync(String server, byte timezone) {
 void Tracker::setupTime(){
 	struct tm tm;
 	float timezone;
-
-	SerialMon.print("Synchronize with ntp server");
-
+	Serial.print("Synchronize with ntp server");
 	if (NTPServerSync("pool.ntp.org", 2) < 0) {
-		SerialMon.println(" failed");
+		Serial.println(" failed");
 		ntp_connected = false;
 	} else {
 		if (!modem.getNetworkTime(&tm.tm_year, &tm.tm_mon, &tm.tm_mday,
 					&tm.tm_hour, &tm.tm_min, &tm.tm_sec, &timezone)) {
-			SerialMon.println(" failed");
+			Serial.println(" failed");
 			ntp_connected = false;
 		} else {
 			if (tm.tm_year < 120) {
-				SerialMon.println(" failed");
+				Serial.println(" failed");
 				ntp_connected = false;
 			} else {
-				SerialMon.println(" success");
+				Serial.println(" success");
 				ntp_connected = true;
 			}
 		}
@@ -229,11 +220,8 @@ void Tracker::setupTime(){
 		tm.tm_year -= 1900;
 		tm.tm_mon -= 1;
 		tm.tm_hour -= 2;
-
 		time_t t = mktime(&tm);
-
 		struct timeval tv = { .tv_sec = t };
-
 		settimeofday(&tv, NULL);
 	}
 }
@@ -244,75 +232,57 @@ void Tracker::setupTime(){
 bool Tracker::connectCloudIoT() { // TODO Add timeout
 	setupTime();
 	jwt = getJwt();
-
 	String client_id = device->getClientId();
 	String url = CLOUD_IOT_CORE_MQTT_HOST_LTS;
 	String port = "8883";
 	String keep_time = "60";
 	bool cleanSession = 0;
-
-	SerialMon.print(String("Connecting to ") + url + ":" + port + " ");
-
+	Serial.print(String("Connecting to ") + url + ":" + port + " ");
 	modem.sendAT(String("+CSSLCFG=\"sslversion\",0,3"));
 	if (modem.waitResponse(30000L) != 1) {return 0;}
-
 	modem.sendAT(GF("+CSSLCFG=\"convert\",2,\"ca.pem\""));
 	if (modem.waitResponse(30000L) != 1) {return 0;}
-
 	modem.sendAT(GF("+CSSLCFG=\"convert\",1,\"client.pem\",\"client.key\""));
 	if (modem.waitResponse(30000L) != 1) {return 0;}
-
 	modem.sendAT(GF("+SMSSL=1,\"ca.pem\",\"client.pem\""));
 	if (modem.waitResponse(30000L) != 1) {return 0;}
-
 	modem.sendAT(String("+SMCONF=\"URL\",\"") +
 			url +
 			GF("\",\"") +
 			port +
 			GF("\""));
 	if (modem.waitResponse(30000L) != 1) {return 0;}
-
 	modem.sendAT(GF("+SMCONF=\"KEEPTIME\",\"") +
 			keep_time +
 			GF("\""));
 	if (modem.waitResponse(30000L) != 1) {return 0;}
-
 	modem.sendAT(GF("+SMCONF=\"CLIENTID\",\"") +
 			client_id +
 			GF("\""));
 	if (modem.waitResponse(30000L) != 1) {return 0;}
-
 	modem.sendAT(String("+SMCONF=\"USERNAME\",\"") +
 			"unused" +
 			GF("\""));
 	if (modem.waitResponse(30000L) != 1) {return 0;}
-
 	modem.sendAT(GF("+SMCONF=\"PASSWORD\",\"") +
 			jwt +
 			GF("\""));
 	if (modem.waitResponse(30000L) != 1) {return 0;}
-
 	modem.sendAT(String("+SMCONF=\"CLEANSS\",") +
 			cleanSession
 			);
 	if (modem.waitResponse(30000L) != 1) {return 0;}
-
 	modem.sendAT(GF("+SMCONF=\"QOS\",1"));
 	if (modem.waitResponse(30000L) != 1) {return 0;}
-
 	modem.sendAT(String("+SMCONF=\"RETAIN\",1"));
 	if (modem.waitResponse(30000L) != 1) {return 0;}
-
 	modem.sendAT(GF("+SMCONF?"));
 	if (modem.waitResponse(30000L) != 1) {return 0;}
-
 	modem.sendAT(GF("+SMCONN"));
 	if (modem.waitResponse(5000L) != 1) {return 0;}
-
-	SerialMon.println("OK");
+	Serial.println("OK");
 	return 1;
 }
-
 
 /**
  * @brief Create JWT token
@@ -322,7 +292,6 @@ String Tracker::getJwt(void) {
 	Serial.println("Refreshing JWT");
 	jwt = device->createJWT(iat, jwt_exp_secs);
 	//Serial.println(jwt);
-
 	return jwt;
 }
 
@@ -350,9 +319,7 @@ void Tracker::read_adc_bat(uint16_t *voltage) {
 		in += (uint32_t)analogRead(PIN_ADC_BAT);
 	}
 	in = (int)in / ADC_BATTERY_LEVEL_SAMPLES;
-
 	uint16_t bat_mv = ((float)in / 4096) * 3600 * 2;
-
 	*voltage = bat_mv;
 }
 
@@ -366,9 +333,7 @@ void Tracker::read_adc_solar(uint16_t *voltage) {
 		in += (uint32_t)analogRead(PIN_ADC_SOLAR);
 	}
 	in = (int)in / ADC_BATTERY_LEVEL_SAMPLES;
-
 	uint16_t bat_mv = ((float)in / 4096) * 3600 * 2;
-
 	*voltage = bat_mv;
 }
 
@@ -386,9 +351,7 @@ void Tracker::read_adc_solar(uint16_t *voltage) {
 int Tracker::modem_upload_cert(const char *cert, const char *name, int folder)
 {
 	int len = strlen(cert);
-
-	SerialMon.println(String("Upload certificate: ") + name);
-
+	Serial.println(String("Upload certificate: ") + name);
 	// Init buffer
 	modem.sendAT(F("+CFSINIT"));
 	if (modem.waitResponse(10000L) != 1) {
@@ -396,9 +359,7 @@ int Tracker::modem_upload_cert(const char *cert, const char *name, int folder)
 		modem.waitResponse();
 		return -1;
 	}
-
 	int timeout = 10000;
-
 	// Write file
 	modem.sendAT(String("+CFSWFILE=") +
 			folder +
@@ -413,10 +374,8 @@ int Tracker::modem_upload_cert(const char *cert, const char *name, int folder)
 		modem.waitResponse();
 		return -2;
 	}
-
 	for (int i = 0; i < len; i++)
 		SerialAT.print(cert[i]);
-
 	if (modem.waitResponse(timeout * 1L, GF("OK")) != 1) {
 		modem.sendAT(F("+CFSTERM"));
 		modem.waitResponse();
@@ -430,7 +389,6 @@ int Tracker::modem_upload_cert(const char *cert, const char *name, int folder)
 		modem.waitResponse();
 		return -4;
 	}
-
 	return 1;
 }
 
@@ -461,9 +419,8 @@ int Tracker::modem_upload_cert(const char *cert, const char *name, int folder)
  * @param qos 0, 1, 2
  */
 bool Tracker::mqttSub(const char *topic, int qos) {
-	SerialMon.print("Subscribing topic: ");
-	SerialMon.println(topic);
-
+	Serial.print("Subscribing topic: ");
+	Serial.println(topic);
 	int len = 21 + strlen(device_id) + strlen(topic) + 1;
 	char auxStr[len];
 	sprintf(auxStr, "+SMSUB=\"/devices/%s/%s\",%i", device_id, topic, qos);
@@ -501,12 +458,11 @@ bool Tracker::mqttDisconnect(void) {
  */
 bool Tracker::sendMqtt(
 		const char *msg, const char *topic, int qos, bool retain) {
-	SerialMon.print("Sending message: ");
-	SerialMon.println(msg);
-
+	Serial.print("Sending message: ");
+	Serial.println(msg);
 	int len = strlen(msg);
 	if (len > 512) {
-		SerialMon.println("Message too long");
+		Serial.println("Message too long");
 		return false;
 	}
 	int slen = 24 + strlen(device_id) + strlen(topic) + 1;
@@ -540,7 +496,6 @@ void Tracker::checkPower(void) {
 	}
 }
 
-
 /**
  * @brief Set SIM7000 network lights off
  * @param onoff 
@@ -558,7 +513,7 @@ bool Tracker::getData(void) {
 	bool ret = true;
 	timestamp = time(nullptr);
 	if (timestamp < 1617808583) {
-		SerialMon.println("Timestamp error");
+		Serial.println("Timestamp error");
 		ret = false;
 	}
 	bootCount = boot_count;
@@ -572,14 +527,14 @@ bool Tracker::getData(void) {
 		temp = sht30.cTemp;
 		hum = sht30.humidity;
 	} else {
-		SerialMon.println("Env error");
+		Serial.println("Env error");
 		ret = false;
 	}
 	pressure = bmp.readPressure();
-	//if (!gps_enabled) {
+	if (!gps_enabled) {
 	enableGPS();
 	gps_enabled = true;
-	//}
+	}
 	gpsEnabled = gps_enabled;
 	if (modem.getGPS(&lat, &lon, &speed,
 				&alt, &vsat, &usat, &accuracy)) {
@@ -591,7 +546,7 @@ bool Tracker::getData(void) {
 		alt = 0;
 		speed = 0;
 		accuracy = 0;
-		SerialMon.println("GPS error");
+		Serial.println("GPS error");
 		ret = false;
 	}
 	return ret;
@@ -692,11 +647,11 @@ bool	Tracker::sendState(DynamicJsonDocument *state) {
 	String s;
 	serializeJson(*state, s);
 	if (!sendMqtt(s.c_str(),"events")) {
-		SerialMon.println("Cannot send MQTT");
+		Serial.println("Cannot send MQTT");
 		return false;
 	}
 	//if (!sendMqtt(s.c_str(),"state")) {
-	//	SerialMon.println("Cannot send MQTT");
+	//	Serial.println("Cannot send MQTT");
 	//	return false;
 	//}
 	return true;
