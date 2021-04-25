@@ -238,6 +238,7 @@ bool Tracker::connectCloudIoT() { // TODO Add timeout
 	String keep_time = "60";
 	bool cleanSession = 0;
 	Serial.print(String("Connecting to ") + url + ":" + port + " ");
+
 	modem.sendAT(String("+CSSLCFG=\"sslversion\",0,3"));
 	if (modem.waitResponse(30000L) != 1) {return 0;}
 	modem.sendAT(GF("+CSSLCFG=\"convert\",2,\"ca.pem\""));
@@ -519,7 +520,7 @@ bool Tracker::getData(void) {
 	bootCount = boot_count;
 	savedStates = saved_states;
 	dataLost = data_lost;
-	//read_adc_bat(&batVoltage);
+	read_adc_bat(&batVoltage);
 	batCharging = batVoltage == 0 ? true : false;
 	read_adc_solar(&solVoltage);
 	if (solVoltage > 4000)
@@ -532,10 +533,10 @@ bool Tracker::getData(void) {
 		ret = false;
 	}
 	pressure = bmp.readPressure();
-	//if (!gps_enabled) {
-	enableGPS();
-	gps_enabled = true;
-	//}
+	if (!gps_enabled) {
+		enableGPS();
+		gps_enabled = true;
+	}
 	gpsEnabled = gps_enabled;
 	if (modem.getGPS(&lat, &lon, &speed,
 				&alt, &vsat, &usat, &accuracy)) {
@@ -651,13 +652,15 @@ void Tracker::setState(DynamicJsonDocument *state) {
 bool	Tracker::sendState(DynamicJsonDocument *state) {
 	String s;
 	serializeJson(*state, s);
-	if (!sendMqtt(s.c_str(),"events")) {
-		Serial.println("Cannot send MQTT");
-		return false;
-	}
 	//if (!sendMqtt(s.c_str(),"state")) {
 	//	Serial.println("Cannot send MQTT");
 	//	return false;
 	//}
-	return true;
+	if (!sendMqtt(s.c_str(),"events")) {
+		Serial.println("Cannot send MQTT");
+		return false;
+	} else {
+		Serial.println("Message sent");
+		return true;
+	}
 }

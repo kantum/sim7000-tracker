@@ -11,12 +11,8 @@
 
 #define LED_PIN 12
 
-//#define TIME_TO_SLEEP  4           // Time ESP32 will go to sleep (in seconds)
-//#define TIME_TO_SLEEP_LOW_BAT 10 * 60
 #define uS_TO_S_FACTOR 1000000ULL
 #define MS_TO_S_FACTOR 1000ULL
-
-//#define SERIAL_BLUETOOTH
 
 HardwareSerial serialGsm(1);
 #define SerialAT serialGsm
@@ -65,9 +61,7 @@ unsigned long connect_start;
 unsigned long connect_end;
 unsigned long delta;
 
-//Tracker tracker;
-
-Tracker *tracker = new Tracker;
+Tracker tracker;
 
 void setup() {
 	Serial.begin(115200);
@@ -93,14 +87,14 @@ void setup() {
 		Serial.println("Could not find a valid BMP280 sensor, check wiring!");
 	}
 
-	tracker->checkPower();
+	tracker.checkPower();
 
-	if (tracker->veryLowBattery) {
+	if (tracker.veryLowBattery) {
 		if (very_low_battery_check) {
 			very_low_battery_check = false;
-			tracker->modemPowerOff();
+			tracker.modemPowerOff();
 			int32_t sleep =
-				tracker->config.lowBatRefreshTime * uS_TO_S_FACTOR - micros();
+				tracker.config.lowBatRefreshTime * uS_TO_S_FACTOR - micros();
 			if (sleep < 0) { sleep = 1; }
 			Serial.println(String("Going to sleep for ") +
 					sleep + " microseconds");
@@ -111,20 +105,22 @@ void setup() {
 			very_low_battery_check = true;
 		}
 	}
-	tracker->modemWake();
+	tracker.modemWake();
 
+	///////////////////////////////////////////////////////////////////////////
+	// Connection to Google Cloud                                            //
 	///////////////////////////////////////////////////////////////////////////
 	int retry;
 	connect_start = micros();
 
 	if (!modem.isNetworkConnected()) {
 		Serial.print("Initializing modem");
-		tracker->modemPowerOn();
-		retry = tracker->config.modemConnectAttempts + 1;
+		tracker.modemPowerOn();
+		retry = tracker.config.modemConnectAttempts + 1;
 		while (!modem.init() && --retry) {
 			Serial.println(" failed");
 			Serial.print("retrying");
-			tracker->modemRestart();
+			tracker.modemRestart();
 			delay(2000);
 		}
 		if (retry) {
@@ -139,66 +135,66 @@ void setup() {
 		modem.setPreferredMode(1);
 		modem.sendAT(F("+CBANDCFG=\"CAT-M\","), 20);
 		modem.waitResponse();
-		retry = tracker->config.networkConnectAttempts + 1;
+		retry = tracker.config.networkConnectAttempts + 1;
 		while(!modem.isNetworkConnected() && --retry) {
 			Serial.print(".");
 			delay(500);
 		}
 		if (retry) {
 			Serial.println(" success");
-			tracker->networkConnected = true;
+			tracker.networkConnected = true;
 		} else {
 			Serial.println(" failed");
-			tracker->networkConnected = false;
+			tracker.networkConnected = false;
 		}
 	} else {
-		tracker->networkConnected = true;
+		tracker.networkConnected = true;
 	}
 
-	if (!modem.isGprsConnected() && tracker->networkConnected) {
+	if (!modem.isGprsConnected() && tracker.networkConnected) {
 		Serial.print("Connecting to " + String(apn));
-		retry = tracker->config.gprsConnectAttempts + 1;
+		retry = tracker.config.gprsConnectAttempts + 1;
 		while (!modem.gprsConnect(apn) && --retry) {
 			Serial.println(" fail");
 			Serial.print("Retrying");
 			modem.gprsDisconnect();
-			tracker->gprsConnected = false;
+			tracker.gprsConnected = false;
 		}
 		if (retry) {
 			Serial.println(" success");
-			tracker->gprsConnected = true;
+			tracker.gprsConnected = true;
 		} else {
 			Serial.println(" failed");
-			tracker->gprsConnected = true;
+			tracker.gprsConnected = true;
 		}
 	} else {
-		if (tracker->networkConnected)
+		if (tracker.networkConnected)
 		{
 			Serial.println("Gprs allready connected");
-			tracker->gprsConnected = true;
+			tracker.gprsConnected = true;
 		} else {
 			Serial.println("No Network, continuing");
 		}
 	}
 	connect_end = micros();
 	delta = connect_end - connect_start;
-	tracker->gprsConnectTime = (double)delta / MS_TO_S_FACTOR;
+	tracker.gprsConnectTime = (double)delta / MS_TO_S_FACTOR;
 
-	tracker->modemLight(true);
+	tracker.modemLight(true);
 
-	if (tracker->networkConnected) {
+	if (tracker.networkConnected) {
 		while (update_certs)
 		{
-			if (tracker->modem_upload_cert(root_cert, "ca.pem", 3) < 1) {
+			if (tracker.modem_upload_cert(root_cert, "ca.pem", 3) < 1) {
 				Serial.println("Upload certificate failed");
 				continue;
 			}
-			if (tracker->modem_upload_cert(
+			if (tracker.modem_upload_cert(
 						client_cert_mosquitto, "client.pem", 3) < 1) {
 				Serial.println("Upload certificate failed");
 				continue;
 			}
-			if (tracker->modem_upload_cert(
+			if (tracker.modem_upload_cert(
 						client_key_mosquitto, "client.key", 3) < 1) {
 				Serial.println("Upload certificate failed");
 				continue;
@@ -207,48 +203,51 @@ void setup() {
 		}
 	}
 
-	tracker->mqttConnected = mqtt_connected;
+	tracker.mqttConnected = mqtt_connected;
 
-	if (tracker->networkConnected && tracker->gprsConnected)
+	if (tracker.networkConnected && tracker.gprsConnected)
 	{
 		device = new CloudIoTCoreDevice(
 				project_id, location, registry_id, device_id, private_key_str);
 
-		retry = tracker->config.cloudConnectAttempts + 1;
+		retry = tracker.config.cloudConnectAttempts + 1;
 		retry = 1;
-		while(!tracker->connectCloudIoT() && --retry) {
+		while(!tracker.connectCloudIoT() && --retry) {
 			Serial.println("Cannot connect to google, retrying...");
 		}
-		tracker->cloudConnected = (retry  ? true : false);
+		tracker.cloudConnected = (retry  ? true : false);
 	}
 
 	///////////////////////////////////////////////////////////////////////////
 
 	DynamicJsonDocument trackerConfig(1024);
 
-	if (!tracker->loadFile(&trackerConfig, "/config.json", 1024)) {
+	if (!tracker.loadFile(&trackerConfig, "/config.json", 1024)) {
 		Serial.println("Failed to load config");
 	} else {
 		Serial.println("Config loaded");
 	}
-	if (tracker->cloudConnected) {
-		if (!tracker->mqttSub("config", 1)) {
+	if (tracker.cloudConnected) {
+		if (!tracker.mqttSub("config", 1)) {
 			Serial.println("Cannot subscribe");
 		} else {
 			Serial.println("Subscribed");
 		}
 		String configStr;
-		if (!tracker->mqttReceive("config", &configStr, 30)) {
+		if (!tracker.mqttReceive("config", &configStr, 30)) {
 			Serial.println("Cannot receive config");
 		} else {
 			Serial.println("Config received");
 		}
 		configStr = configStr.substring(1, configStr.length() -2);
 		deserializeJson(trackerConfig, configStr);
-	}
-	tracker->setConfig(&trackerConfig);
 
-	if (!tracker->saveFile(&trackerConfig, "/config.json")) {
+		serializeJsonPretty(trackerConfig, Serial);
+		Serial.println();
+	}
+	tracker.setConfig(&trackerConfig);
+
+	if (!tracker.saveFile(&trackerConfig, "/config.json")) {
 		Serial.println("Failed to save config");
 	} else {
 		Serial.println("Config saved");
@@ -256,24 +255,22 @@ void setup() {
 
 	DynamicJsonDocument trackerState(2048);
 
-	tracker->getData();
-	tracker->setState(&trackerState);
-
-	serializeJsonPretty(trackerState, Serial);
-	Serial.println();
+	tracker.getData();
+	tracker.setState(&trackerState);
 
 	uint32_t bufSize =
-		trackerState.memoryUsage() * (tracker->config.maxSavedStates + 2); // TODO be more precise than adding an arbitrary 2
+		trackerState.memoryUsage() * (tracker.config.maxSavedStates + 2); // TODO be more precise than adding an arbitrary 2
 	DynamicJsonDocument buffer(bufSize);
 
 	if (saved_states) {
-		if (!tracker->loadFile(&buffer, "/states.json", bufSize)) {
+		if (!tracker.loadFile(&buffer, "/states.json", bufSize)) {
 			Serial.println("Failed to load states");
 		} else {
 			Serial.println("Loading saved states");
 		}
-		if (saved_states >= tracker->config.maxSavedStates) {
+		if (saved_states >= tracker.config.maxSavedStates) {
 			data_lost = true;
+			trackerState["dataLost"] = true;
 			buffer.remove(0);
 			saved_states--;
 		}
@@ -285,14 +282,16 @@ void setup() {
 		saved_states++;
 	}
 
-	for (int i = 0; i <= saved_states; i++) {
-		DynamicJsonDocument tmp(1024);
-		tmp = buffer[i].as<JsonObject>();
+	serializeJsonPretty(buffer, Serial);
+	Serial.println();
 
-		if (!tracker->sendState(&tmp)) {
+	for (JsonVariant value : buffer.as<JsonArray>()) {
+		DynamicJsonDocument tmp(1024);
+		tmp = value.as<JsonObject>();
+
+		if (!tracker.sendState(&tmp)) {
 			break;
 		} else {
-			Serial.println(i);
 			buffer.remove(0);
 			saved_states--;
 		}
@@ -300,7 +299,7 @@ void setup() {
 	if (saved_states == 0) {
 		data_lost = false;
 	}
-	if (!tracker->saveFile(&buffer, "/states.json")) {
+	if (!tracker.saveFile(&buffer, "/states.json")) {
 		Serial.println("Failed to save states");
 	} else {
 		Serial.println("Saving states");
@@ -309,9 +308,9 @@ void setup() {
 	serializeJsonPretty(buffer, Serial);
 	Serial.println();
 
-	tracker->mqttDisconnect();
-	tracker->modemSleep();
-	int32_t sleep = tracker->config.refreshTime * uS_TO_S_FACTOR - micros();
+	tracker.mqttDisconnect();
+	tracker.modemSleep();
+	int32_t sleep = tracker.config.refreshTime * uS_TO_S_FACTOR - micros();
 	if (sleep < 0)
 		sleep = 1;
 	Serial.println(String("Going to sleep for ") +
